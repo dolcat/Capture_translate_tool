@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 
 import '../core/app_theme.dart';
@@ -13,6 +14,18 @@ import '../services/translation_service.dart';
 import '../widgets/translation_panel.dart';
 
 enum WorkspaceStatus { idle, capturing, analyzing, translating, success, error }
+
+class _NewTranslationIntent extends Intent {
+  const _NewTranslationIntent();
+}
+
+class _TranslateTypedTextIntent extends Intent {
+  const _TranslateTypedTextIntent();
+}
+
+class _InsertNewlineIntent extends Intent {
+  const _InsertNewlineIntent();
+}
 
 class TranslationWorkspace extends StatefulWidget {
   const TranslationWorkspace({
@@ -41,10 +54,13 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   WorkspaceStatus _status = WorkspaceStatus.idle;
   AnalysisResult? _result;
   final TextEditingController _sourceController = TextEditingController();
+  final FocusNode _sourceFocusNode = FocusNode();
   String _translatedText = '';
   String? _lastImagePath;
   String? _errorMessage;
   HotKey _configuredHotkey = _defaultCaptureHotkey();
+  HotKey _newTranslationHotkey = _defaultNewTranslationHotkey();
+  HotKey _translateHotkey = _defaultTranslateHotkey();
   HotKey? _captureHotkey;
   bool _lastActionWasTextTranslation = false;
 
@@ -56,7 +72,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeHotkey());
+    _sourceFocusNode.addListener(_handleSourceFocusChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeShortcuts());
   }
 
   static HotKey _defaultCaptureHotkey() {
@@ -67,11 +84,39 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     );
   }
 
-  Future<void> _initializeHotkey() async {
-    final saved = await widget.shortcutPreferences.loadCaptureShortcut();
+  static HotKey _defaultNewTranslationHotkey() {
+    return HotKey(
+      key: PhysicalKeyboardKey.keyN,
+      modifiers: [HotKeyModifier.control],
+      scope: HotKeyScope.inapp,
+    );
+  }
+
+  static HotKey _defaultTranslateHotkey() {
+    return HotKey(
+      key: PhysicalKeyboardKey.enter,
+      modifiers: const [],
+      scope: HotKeyScope.inapp,
+    );
+  }
+
+  void _handleSourceFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _initializeShortcuts() async {
+    final saved = await Future.wait([
+      widget.shortcutPreferences.loadCaptureShortcut(),
+      widget.shortcutPreferences.loadNewTranslationShortcut(),
+      widget.shortcutPreferences.loadTranslateShortcut(),
+    ]);
     if (!mounted) return;
-    final hotkey = saved ?? _configuredHotkey;
-    setState(() => _configuredHotkey = hotkey);
+    final hotkey = saved[0] ?? _configuredHotkey;
+    setState(() {
+      _configuredHotkey = hotkey;
+      _newTranslationHotkey = saved[1] ?? _newTranslationHotkey;
+      _translateHotkey = saved[2] ?? _translateHotkey;
+    });
     if (widget.registerSystemHotkey) {
       await _activateHotkey(hotkey);
     }
@@ -106,20 +151,60 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     }
   }
 
-  Future<String?> _saveCaptureHotkey(HotKey hotkey) async {
+  Future<String?> _saveShortcuts(
+    HotKey capture,
+    HotKey newTranslation,
+    HotKey translate,
+  ) async {
     final previous = _configuredHotkey;
     if (widget.registerSystemHotkey) {
-      final registrationError = await _activateHotkey(hotkey);
+      final registrationError = await _activateHotkey(capture);
       if (registrationError != null) return registrationError;
     }
     try {
-      await widget.shortcutPreferences.saveCaptureShortcut(hotkey);
+      await widget.shortcutPreferences.saveShortcuts(
+        capture: capture,
+        newTranslation: newTranslation,
+        translate: translate,
+      );
     } catch (error) {
       if (widget.registerSystemHotkey) await _activateHotkey(previous);
       return 'Không thể lưu phím tắt: $error';
     }
-    if (mounted) setState(() => _configuredHotkey = hotkey);
+    if (mounted) {
+      setState(() {
+        _configuredHotkey = capture;
+        _newTranslationHotkey = newTranslation;
+        _translateHotkey = translate;
+      });
+    }
     return null;
+  }
+
+  SingleActivator _activatorFor(HotKey hotkey) {
+    final modifiers = hotkey.modifiers ?? const <HotKeyModifier>[];
+    return SingleActivator(
+      hotkey.logicalKey,
+      control: modifiers.contains(HotKeyModifier.control),
+      alt: modifiers.contains(HotKeyModifier.alt),
+      shift: modifiers.contains(HotKeyModifier.shift),
+      meta: modifiers.contains(HotKeyModifier.meta),
+      includeRepeats: false,
+    );
+  }
+
+  void _insertSourceNewline() {
+    if (_isBusy) return;
+    final value = _sourceController.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    final updatedText = value.text.replaceRange(start, end, '\n');
+    _sourceController.value = value.copyWith(
+      text: updatedText,
+      selection: TextSelection.collapsed(offset: start + 1),
+      composing: TextRange.empty,
+    );
   }
 
   List<String> get _shortcutLabels {
@@ -144,7 +229,6 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       _errorMessage = null;
       _lastActionWasTextTranslation = false;
     });
-
     try {
       String? imagePath;
       await widget.appWindowService.hideForCapture();
@@ -239,6 +323,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       _errorMessage = null;
       _lastActionWasTextTranslation = false;
     });
+    _sourceFocusNode.requestFocus();
   }
 
   void _showCopiedMessage(String label) {
@@ -257,9 +342,13 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     showDialog<void>(
       context: context,
       builder: (context) => _ShortcutSettingsDialog(
-        currentHotkey: _configuredHotkey,
-        defaultHotkey: _defaultCaptureHotkey(),
-        onSave: _saveCaptureHotkey,
+        currentCaptureHotkey: _configuredHotkey,
+        currentNewTranslationHotkey: _newTranslationHotkey,
+        currentTranslateHotkey: _translateHotkey,
+        defaultCaptureHotkey: _defaultCaptureHotkey(),
+        defaultNewTranslationHotkey: _defaultNewTranslationHotkey(),
+        defaultTranslateHotkey: _defaultTranslateHotkey(),
+        onSave: _saveShortcuts,
       ),
     );
   }
@@ -271,81 +360,123 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       unawaited(hotKeyManager.unregister(hotkey));
     }
     _sourceController.dispose();
+    _sourceFocusNode
+      ..removeListener(_handleSourceFocusChanged)
+      ..dispose();
     widget.translationService.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final horizontalPadding = constraints.maxWidth < 480
-                ? 12.0
-                : constraints.maxWidth < 720
-                ? 16.0
-                : 30.0;
-            final verticalPadding = constraints.maxWidth < 480 ? 18.0 : 28.0;
+    final shortcuts = <ShortcutActivator, Intent>{
+      _activatorFor(_newTranslationHotkey): const _NewTranslationIntent(),
+      if (_sourceFocusNode.hasFocus)
+        _activatorFor(_translateHotkey): const _TranslateTypedTextIntent(),
+      if (_sourceFocusNode.hasFocus)
+        const SingleActivator(
+          LogicalKeyboardKey.enter,
+          shift: true,
+          includeRepeats: false,
+        ): const _InsertNewlineIntent(),
+    };
+    return Shortcuts(
+      shortcuts: shortcuts,
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _NewTranslationIntent: CallbackAction<_NewTranslationIntent>(
+            onInvoke: (_) {
+              _startNewSession();
+              return null;
+            },
+          ),
+          _TranslateTypedTextIntent: CallbackAction<_TranslateTypedTextIntent>(
+            onInvoke: (_) {
+              unawaited(_translateTypedText());
+              return null;
+            },
+          ),
+          _InsertNewlineIntent: CallbackAction<_InsertNewlineIntent>(
+            onInvoke: (_) {
+              _insertSourceNewline();
+              return null;
+            },
+          ),
+        },
+        child: Scaffold(
+          body: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final horizontalPadding = constraints.maxWidth < 480
+                    ? 12.0
+                    : constraints.maxWidth < 720
+                    ? 16.0
+                    : 30.0;
+                final verticalPadding = constraints.maxWidth < 480
+                    ? 18.0
+                    : 28.0;
 
-            return SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _AppHeader(
-                    isBusy: _isBusy,
-                    onNew: _startNewSession,
-                    onSettings: _showSetupDialog,
-                    onCapture: _captureAndTranslate,
-                  ),
-                  const Divider(height: 1, color: AppColors.border),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      verticalPadding,
-                      horizontalPadding,
-                      24,
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1360),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _WorkspaceIntro(
-                              onCapture: _captureAndTranslate,
-                              shortcutLabels: _shortcutLabels,
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _AppHeader(
+                        isBusy: _isBusy,
+                        onNew: _startNewSession,
+                        onSettings: _showSetupDialog,
+                        onCapture: _captureAndTranslate,
+                      ),
+                      const Divider(height: 1, color: AppColors.border),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          verticalPadding,
+                          horizontalPadding,
+                          24,
+                        ),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1360),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _WorkspaceIntro(
+                                  onCapture: _captureAndTranslate,
+                                  shortcutLabels: _shortcutLabels,
+                                ),
+                                SizedBox(
+                                  height: constraints.maxWidth < 480 ? 16 : 22,
+                                ),
+                                _TranslationCard(
+                                  status: _status,
+                                  result: _result,
+                                  lastImagePath: _lastImagePath,
+                                  errorMessage: _errorMessage,
+                                  sourceController: _sourceController,
+                                  sourceFocusNode: _sourceFocusNode,
+                                  translatedText: _translatedText,
+                                  onTranslate: _translateTypedText,
+                                  onRetry: _lastActionWasTextTranslation
+                                      ? _translateTypedText
+                                      : _captureAndTranslate,
+                                  onCopyOriginal: () =>
+                                      _showCopiedMessage('văn bản nhận diện'),
+                                  onCopyTranslation: () =>
+                                      _showCopiedMessage('bản dịch'),
+                                ),
+                                const SizedBox(height: 18),
+                                const _PrivacyFooter(),
+                              ],
                             ),
-                            SizedBox(
-                              height: constraints.maxWidth < 480 ? 16 : 22,
-                            ),
-                            _TranslationCard(
-                              status: _status,
-                              result: _result,
-                              lastImagePath: _lastImagePath,
-                              errorMessage: _errorMessage,
-                              sourceController: _sourceController,
-                              translatedText: _translatedText,
-                              onTranslate: _translateTypedText,
-                              onRetry: _lastActionWasTextTranslation
-                                  ? _translateTypedText
-                                  : _captureAndTranslate,
-                              onCopyOriginal: () =>
-                                  _showCopiedMessage('văn bản nhận diện'),
-                              onCopyTranslation: () =>
-                                  _showCopiedMessage('bản dịch'),
-                            ),
-                            const SizedBox(height: 18),
-                            const _PrivacyFooter(),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -389,10 +520,13 @@ class _AppHeader extends StatelessWidget {
                   color: AppColors.primaryDark,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(
-                  Icons.document_scanner_outlined,
-                  color: Colors.white,
-                  size: 21,
+                child: Padding(
+                  padding: const EdgeInsets.all(5),
+                  child: SvgPicture.asset(
+                    'assets/spouting-whale.svg',
+                    fit: BoxFit.contain,
+                    semanticsLabel: 'LingoSnap',
+                  ),
                 ),
               ),
               if (showBrandName) ...[
@@ -601,6 +735,7 @@ class _TranslationCard extends StatelessWidget {
     required this.lastImagePath,
     required this.errorMessage,
     required this.sourceController,
+    required this.sourceFocusNode,
     required this.translatedText,
     required this.onTranslate,
     required this.onRetry,
@@ -613,6 +748,7 @@ class _TranslationCard extends StatelessWidget {
   final String? lastImagePath;
   final String? errorMessage;
   final TextEditingController sourceController;
+  final FocusNode sourceFocusNode;
   final String translatedText;
   final VoidCallback onTranslate;
   final VoidCallback onRetry;
@@ -672,6 +808,7 @@ class _TranslationCard extends StatelessWidget {
                         : 'OCR ${(confidence * 100).round()}%',
                     textKey: const Key('recognized-text'),
                     controller: sourceController,
+                    focusNode: sourceFocusNode,
                     onTranslate: onTranslate,
                     onCopied: onCopyOriginal,
                   ),
@@ -983,19 +1120,34 @@ class _KeyCap extends StatelessWidget {
 
 class _ShortcutSettingsDialog extends StatefulWidget {
   const _ShortcutSettingsDialog({
-    required this.currentHotkey,
-    required this.defaultHotkey,
+    required this.currentCaptureHotkey,
+    required this.currentNewTranslationHotkey,
+    required this.currentTranslateHotkey,
+    required this.defaultCaptureHotkey,
+    required this.defaultNewTranslationHotkey,
+    required this.defaultTranslateHotkey,
     required this.onSave,
   });
 
-  final HotKey currentHotkey;
-  final HotKey defaultHotkey;
-  final Future<String?> Function(HotKey hotkey) onSave;
+  final HotKey currentCaptureHotkey;
+  final HotKey currentNewTranslationHotkey;
+  final HotKey currentTranslateHotkey;
+  final HotKey defaultCaptureHotkey;
+  final HotKey defaultNewTranslationHotkey;
+  final HotKey defaultTranslateHotkey;
+  final Future<String?> Function(
+    HotKey capture,
+    HotKey newTranslation,
+    HotKey translate,
+  )
+  onSave;
 
   @override
   State<_ShortcutSettingsDialog> createState() =>
       _ShortcutSettingsDialogState();
 }
+
+enum _ShortcutTarget { capture, newTranslation, translate }
 
 class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
   static const _supportedModifiers = {
@@ -1005,15 +1157,19 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
     HotKeyModifier.meta,
   };
 
-  late HotKey _candidate;
-  bool _isRecording = false;
+  late HotKey _captureCandidate;
+  late HotKey _newTranslationCandidate;
+  late HotKey _translateCandidate;
+  _ShortcutTarget? _recordingTarget;
   bool _isSaving = false;
   String? _message;
 
   @override
   void initState() {
     super.initState();
-    _candidate = widget.currentHotkey;
+    _captureCandidate = widget.currentCaptureHotkey;
+    _newTranslationCandidate = widget.currentNewTranslationHotkey;
+    _translateCandidate = widget.currentTranslateHotkey;
   }
 
   bool _isModifierKey(PhysicalKeyboardKey key) {
@@ -1022,51 +1178,112 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
     );
   }
 
-  void _recordHotkey(HotKey recorded) {
+  HotKey _candidateFor(_ShortcutTarget target) => switch (target) {
+    _ShortcutTarget.capture => _captureCandidate,
+    _ShortcutTarget.newTranslation => _newTranslationCandidate,
+    _ShortcutTarget.translate => _translateCandidate,
+  };
+
+  HotKey _defaultFor(_ShortcutTarget target) => switch (target) {
+    _ShortcutTarget.capture => widget.defaultCaptureHotkey,
+    _ShortcutTarget.newTranslation => widget.defaultNewTranslationHotkey,
+    _ShortcutTarget.translate => widget.defaultTranslateHotkey,
+  };
+
+  void _setCandidate(_ShortcutTarget target, HotKey hotkey) {
+    switch (target) {
+      case _ShortcutTarget.capture:
+        _captureCandidate = hotkey;
+      case _ShortcutTarget.newTranslation:
+        _newTranslationCandidate = hotkey;
+      case _ShortcutTarget.translate:
+        _translateCandidate = hotkey;
+    }
+  }
+
+  void _recordHotkey(_ShortcutTarget target, HotKey recorded) {
     final key = recorded.physicalKey;
     final modifiers = (recorded.modifiers ?? const <HotKeyModifier>[])
         .where(_supportedModifiers.contains)
         .toList();
-    if (_isModifierKey(key) || modifiers.isEmpty) {
+    final allowsPlainEnter =
+        target == _ShortcutTarget.translate &&
+        (key == PhysicalKeyboardKey.enter ||
+            key == PhysicalKeyboardKey.numpadEnter);
+    final isReservedShiftEnter =
+        target == _ShortcutTarget.translate &&
+        allowsPlainEnter &&
+        modifiers.length == 1 &&
+        modifiers.single == HotKeyModifier.shift;
+    if (isReservedShiftEnter) {
+      setState(() => _message = 'Shift+Enter được dành để xuống dòng.');
+      return;
+    }
+    if (_isModifierKey(key) || (modifiers.isEmpty && !allowsPlainEnter)) {
       setState(() {
-        _message =
-            'Tổ hợp cần có ít nhất Ctrl, Alt, Shift hoặc Win cùng một phím.';
+        _message = target == _ShortcutTarget.translate
+            ? 'Phím dịch không có bổ trợ chỉ được phép là Enter.'
+            : 'Tổ hợp cần có ít nhất Ctrl, Alt, Shift hoặc Win cùng một phím.';
       });
       return;
     }
 
     setState(() {
-      _candidate = HotKey(
-        identifier: widget.currentHotkey.identifier,
-        key: key,
-        modifiers: modifiers,
-        scope: HotKeyScope.system,
+      final current = _candidateFor(target);
+      _setCandidate(
+        target,
+        HotKey(
+          identifier: current.identifier,
+          key: key,
+          modifiers: modifiers,
+          scope: target == _ShortcutTarget.capture
+              ? HotKeyScope.system
+              : HotKeyScope.inapp,
+        ),
       );
-      _isRecording = false;
+      _recordingTarget = null;
       _message = null;
     });
   }
 
-  void _resetToDefault() {
+  void _resetToDefault(_ShortcutTarget target) {
     setState(() {
-      _candidate = HotKey(
-        identifier: widget.currentHotkey.identifier,
-        key: widget.defaultHotkey.key,
-        modifiers: widget.defaultHotkey.modifiers,
-        scope: HotKeyScope.system,
+      final current = _candidateFor(target);
+      final defaultHotkey = _defaultFor(target);
+      _setCandidate(
+        target,
+        HotKey(
+          identifier: current.identifier,
+          key: defaultHotkey.key,
+          modifiers: defaultHotkey.modifiers,
+          scope: defaultHotkey.scope,
+        ),
       );
-      _isRecording = false;
+      _recordingTarget = null;
       _message = null;
     });
   }
 
   Future<void> _save() async {
-    if (_isSaving || _isRecording) return;
+    if (_isSaving || _recordingTarget != null) return;
+    final signatures = {
+      _shortcutSignature(_captureCandidate),
+      _shortcutSignature(_newTranslationCandidate),
+      _shortcutSignature(_translateCandidate),
+    };
+    if (signatures.length != 3) {
+      setState(() => _message = 'Mỗi hành động cần một phím tắt khác nhau.');
+      return;
+    }
     setState(() {
       _isSaving = true;
       _message = null;
     });
-    final error = await widget.onSave(_candidate);
+    final error = await widget.onSave(
+      _captureCandidate,
+      _newTranslationCandidate,
+      _translateCandidate,
+    );
     if (!mounted) return;
     if (error == null) {
       Navigator.of(context).pop();
@@ -1076,6 +1293,85 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
       _isSaving = false;
       _message = error;
     });
+  }
+
+  String _shortcutSignature(HotKey hotkey) {
+    final modifiers =
+        (hotkey.modifiers ?? const <HotKeyModifier>[])
+            .map((modifier) => modifier.name)
+            .toList()
+          ..sort();
+    return '${hotkey.physicalKey.usbHidUsage}:${modifiers.join(',')}';
+  }
+
+  Widget _buildShortcutEditor({
+    required _ShortcutTarget target,
+    required String title,
+    required String description,
+    required Key previewKey,
+    required Key recorderKey,
+    required Key buttonKey,
+  }) {
+    final candidate = _candidateFor(target);
+    final isRecording = _recordingTarget == target;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Text(description, style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 12),
+        Container(
+          key: previewKey,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceSubtle,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: isRecording
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Nhấn tổ hợp phím mới…'),
+                    const SizedBox(height: 10),
+                    HotKeyRecorder(
+                      key: recorderKey,
+                      initalHotKey: candidate,
+                      onHotKeyRecorded: (hotkey) =>
+                          _recordHotkey(target, hotkey),
+                    ),
+                  ],
+                )
+              : HotKeyVirtualView(hotKey: candidate),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: buttonKey,
+              onPressed: _isSaving
+                  ? null
+                  : () => setState(() {
+                      _recordingTarget = isRecording ? null : target;
+                      _message = null;
+                    }),
+              icon: Icon(
+                isRecording ? Icons.close_rounded : Icons.keyboard_rounded,
+                size: 18,
+              ),
+              label: Text(isRecording ? 'Hủy ghi' : 'Thay đổi'),
+            ),
+            TextButton(
+              onPressed: _isSaving ? null : () => _resetToDefault(target),
+              child: const Text('Khôi phục mặc định'),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
@@ -1104,38 +1400,40 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Divider(height: 1),
             ),
-            Text(
-              'Phím tắt chụp vùng',
-              style: Theme.of(context).textTheme.titleMedium,
+            _buildShortcutEditor(
+              target: _ShortcutTarget.capture,
+              title: 'Chụp vùng màn hình',
+              description:
+                  'Hoạt động trên toàn hệ thống, kể cả khi cửa sổ đang ẩn.',
+              previewKey: const Key('shortcut-preview'),
+              recorderKey: const Key('hotkey-recorder'),
+              buttonKey: const Key('record-shortcut-button'),
             ),
-            const SizedBox(height: 6),
-            Text(
-              'Phím tắt hoạt động trên toàn hệ thống, kể cả khi cửa sổ đang ẩn.',
-              style: Theme.of(context).textTheme.bodyMedium,
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(height: 1),
             ),
-            const SizedBox(height: 14),
-            Container(
-              key: const Key('shortcut-preview'),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceSubtle,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: _isRecording
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Nhấn tổ hợp phím mới…'),
-                        const SizedBox(height: 10),
-                        HotKeyRecorder(
-                          key: const Key('hotkey-recorder'),
-                          initalHotKey: _candidate,
-                          onHotKeyRecorded: _recordHotkey,
-                        ),
-                      ],
-                    )
-                  : HotKeyVirtualView(hotKey: _candidate),
+            _buildShortcutEditor(
+              target: _ShortcutTarget.newTranslation,
+              title: 'Bản dịch mới',
+              description:
+                  'Xóa nội dung hiện tại và đưa con trỏ về ô văn bản nguồn.',
+              previewKey: const Key('new-shortcut-preview'),
+              recorderKey: const Key('new-hotkey-recorder'),
+              buttonKey: const Key('record-new-shortcut-button'),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(height: 1),
+            ),
+            _buildShortcutEditor(
+              target: _ShortcutTarget.translate,
+              title: 'Dịch văn bản nhập tay',
+              description:
+                  'Chỉ hoạt động khi đang nhập ô nguồn. Dùng Shift+Enter để xuống dòng.',
+              previewKey: const Key('translate-shortcut-preview'),
+              recorderKey: const Key('translate-hotkey-recorder'),
+              buttonKey: const Key('record-translate-shortcut-button'),
             ),
             if (_message != null) ...[
               const SizedBox(height: 10),
@@ -1145,31 +1443,6 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
                 style: const TextStyle(color: AppColors.error, fontSize: 12),
               ),
             ],
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  key: const Key('record-shortcut-button'),
-                  onPressed: _isSaving
-                      ? null
-                      : () => setState(() {
-                          _isRecording = !_isRecording;
-                          _message = null;
-                        }),
-                  icon: Icon(
-                    _isRecording ? Icons.close_rounded : Icons.keyboard_rounded,
-                    size: 18,
-                  ),
-                  label: Text(_isRecording ? 'Hủy ghi' : 'Thay đổi'),
-                ),
-                TextButton(
-                  onPressed: _isSaving ? null : _resetToDefault,
-                  child: const Text('Khôi phục mặc định'),
-                ),
-              ],
-            ),
           ],
         ),
       ),
@@ -1180,7 +1453,7 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
         ),
         FilledButton(
           key: const Key('save-shortcut-button'),
-          onPressed: _isSaving || _isRecording ? null : _save,
+          onPressed: _isSaving || _recordingTarget != null ? null : _save,
           child: Text(_isSaving ? 'Đang lưu…' : 'Lưu'),
         ),
       ],

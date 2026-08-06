@@ -108,6 +108,87 @@ void main() {
     expect(find.text('Bản dịch nhập tay'), findsOneWidget);
   });
 
+  testWidgets('Enter translates typed text and Ctrl+N starts a new one', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final translationService = _FakeTranslationService();
+    await tester.pumpWidget(
+      CaptureTranslateApp(
+        appWindowService: _FakeAppWindowService(),
+        captureService: _FakeCaptureService(),
+        translationService: translationService,
+        registerSystemHotkey: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final sourceFinder = find.byKey(const Key('recognized-text'));
+    await tester.tap(sourceFinder);
+    await tester.enterText(sourceFinder, 'Translate with Enter');
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+    );
+    await tester.pumpAndSettle();
+
+    expect(translationService.lastSourceText, 'Translate with Enter');
+    expect(find.text('Bản dịch nhập tay'), findsOneWidget);
+
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.keyN,
+      physicalKey: PhysicalKeyboardKey.keyN,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.keyN,
+      physicalKey: PhysicalKeyboardKey.keyN,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.pumpAndSettle();
+
+    final sourceField = tester.widget<TextField>(sourceFinder);
+    expect(sourceField.controller?.text, isEmpty);
+    expect(sourceField.focusNode?.hasFocus, isTrue);
+    expect(find.text('Bản dịch nhập tay'), findsNothing);
+
+    await tester.enterText(sourceFinder, 'First line');
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.shiftLeft,
+      physicalKey: PhysicalKeyboardKey.shiftLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.shiftLeft,
+      physicalKey: PhysicalKeyboardKey.shiftLeft,
+    );
+    await tester.pump();
+
+    expect(sourceField.controller?.text, 'First line\n');
+    expect(translationService.lastSourceText, 'Translate with Enter');
+  });
+
   testWidgets('records and saves a custom capture shortcut', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
@@ -128,6 +209,13 @@ void main() {
 
     await tester.tap(find.byKey(const Key('settings-button')));
     await tester.pumpAndSettle();
+    expect(find.text('Bản dịch mới'), findsOneWidget);
+    expect(find.text('Dịch văn bản nhập tay'), findsOneWidget);
+    expect(find.byKey(const Key('record-new-shortcut-button')), findsOneWidget);
+    expect(
+      find.byKey(const Key('record-translate-shortcut-button')),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const Key('record-shortcut-button')));
     await tester.pump();
 
@@ -157,16 +245,56 @@ void main() {
     );
     await tester.pump();
 
+    final recordNewButton = find.byKey(const Key('record-new-shortcut-button'));
+    await tester.ensureVisible(recordNewButton);
+    await tester.tap(recordNewButton);
+    await tester.pump();
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.shiftLeft,
+      physicalKey: PhysicalKeyboardKey.shiftLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.keyM,
+      physicalKey: PhysicalKeyboardKey.keyM,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.keyM,
+      physicalKey: PhysicalKeyboardKey.keyM,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.shiftLeft,
+      physicalKey: PhysicalKeyboardKey.shiftLeft,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.pump();
+
+    await tester.ensureVisible(find.byKey(const Key('save-shortcut-button')));
     await tester.tap(find.byKey(const Key('save-shortcut-button')));
     await tester.pumpAndSettle();
 
     final saved = await preferences.loadCaptureShortcut();
+    final savedNew = await preferences.loadNewTranslationShortcut();
+    final savedTranslate = await preferences.loadTranslateShortcut();
     expect(saved, isNotNull);
     expect(saved!.physicalKey, PhysicalKeyboardKey.keyG);
     expect(
       saved.modifiers,
       containsAll([HotKeyModifier.control, HotKeyModifier.alt]),
     );
+    expect(savedNew?.physicalKey, PhysicalKeyboardKey.keyM);
+    expect(
+      savedNew?.modifiers,
+      containsAll([HotKeyModifier.control, HotKeyModifier.shift]),
+    );
+    expect(savedTranslate?.physicalKey, PhysicalKeyboardKey.enter);
+    expect(savedTranslate?.modifiers, isEmpty);
     expect(find.text('G'), findsOneWidget);
   });
 

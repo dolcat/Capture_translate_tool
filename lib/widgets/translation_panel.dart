@@ -17,6 +17,7 @@ class TranslationPanel extends StatelessWidget {
     this.badge,
     this.textKey,
     this.controller,
+    this.focusNode,
     this.onTranslate,
     super.key,
   });
@@ -33,6 +34,7 @@ class TranslationPanel extends StatelessWidget {
   final VoidCallback onCopied;
   final Key? textKey;
   final TextEditingController? controller;
+  final FocusNode? focusNode;
   final VoidCallback? onTranslate;
 
   @override
@@ -96,6 +98,7 @@ class TranslationPanel extends StatelessWidget {
                 child: TextField(
                   key: textKey,
                   controller: controller,
+                  focusNode: focusNode,
                   readOnly: isLoading,
                   expands: true,
                   minLines: null,

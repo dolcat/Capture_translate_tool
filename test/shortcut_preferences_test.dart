@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 
 void main() {
-  test('saves and reloads the capture shortcut', () async {
+  test('saves and reloads all shortcuts', () async {
     final directory = await Directory.systemTemp.createTemp(
       'lingosnap-shortcut-test-',
     );
@@ -22,9 +22,26 @@ void main() {
       modifiers: [HotKeyModifier.control, HotKeyModifier.alt],
       scope: HotKeyScope.system,
     );
+    final newTranslation = HotKey(
+      key: PhysicalKeyboardKey.keyN,
+      modifiers: [HotKeyModifier.control, HotKeyModifier.shift],
+      scope: HotKeyScope.inapp,
+    );
+    final translate = HotKey(
+      key: PhysicalKeyboardKey.enter,
+      modifiers: const [],
+      scope: HotKeyScope.inapp,
+    );
 
     await preferences.saveCaptureShortcut(shortcut);
+    await preferences.saveShortcuts(
+      capture: shortcut,
+      newTranslation: newTranslation,
+      translate: translate,
+    );
     final loaded = await preferences.loadCaptureShortcut();
+    final loadedNew = await preferences.loadNewTranslationShortcut();
+    final loadedTranslate = await preferences.loadTranslateShortcut();
 
     expect(loaded, isNotNull);
     expect(loaded!.physicalKey, PhysicalKeyboardKey.keyG);
@@ -32,5 +49,9 @@ void main() {
       loaded.modifiers,
       containsAll([HotKeyModifier.control, HotKeyModifier.alt]),
     );
+    expect(loadedNew?.physicalKey, PhysicalKeyboardKey.keyN);
+    expect(loadedNew?.modifiers, contains(HotKeyModifier.shift));
+    expect(loadedTranslate?.physicalKey, PhysicalKeyboardKey.enter);
+    expect(loadedTranslate?.modifiers, isEmpty);
   });
 }

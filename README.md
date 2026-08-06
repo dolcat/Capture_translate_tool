@@ -11,9 +11,10 @@ flutter run -d windows
 ```
 
 Ứng dụng gọi backend cục bộ qua `POST http://127.0.0.1:8765/analyze` theo hợp
-đồng trong `docs/tom_tat_tool.md`. Phím tắt toàn hệ thống mặc định là
-`Ctrl + Shift + T`. Người dùng có thể ghi và lưu một tổ hợp khác trong
-**Settings → Phím tắt chụp vùng**; cấu hình được lưu tại
+đồng trong `docs/tom_tat_tool.md`. Các phím tắt mặc định là `Ctrl + Shift + T`
+để chụp vùng màn hình, `Ctrl + N` để tạo bản dịch nhập tay mới và `Enter` để
+dịch nội dung trong ô nguồn (`Shift + Enter` để xuống dòng). Người dùng có thể
+chỉnh cả ba tổ hợp trong **Settings**; cấu hình được lưu tại
 `%APPDATA%\LingoSnap\settings.json`.
 
 Thiết lập backend và tải model lần đầu:
