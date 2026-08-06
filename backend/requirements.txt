@@ -1,0 +1,7 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+rapidocr>=3.9,<4
+onnxruntime>=1.28,<2
+ctranslate2>=4.6,<5
+sentencepiece>=0.2,<1
+requests>=2.32,<3
