@@ -4,6 +4,7 @@ import 'core/app_theme.dart';
 import 'screens/translation_workspace.dart';
 import 'services/app_window_service.dart';
 import 'services/capture_service.dart';
+import 'services/grammar_service.dart';
 import 'services/translation_service.dart';
 import 'services/shortcut_preferences.dart';
 
@@ -13,11 +14,13 @@ class CaptureTranslateApp extends StatelessWidget {
     AppWindowService? appWindowService,
     ScreenCaptureService? captureService,
     TranslationService? translationService,
+    GrammarService? grammarService,
     ShortcutPreferences? shortcutPreferences,
     this.registerSystemHotkey = true,
   }) : appWindowService = appWindowService ?? DesktopAppWindowService(),
        captureService = captureService ?? WindowsScreenCaptureService(),
        translationService = translationService ?? LocalTranslationService(),
+       grammarService = grammarService ?? LocalGrammarService(),
        shortcutPreferences =
            shortcutPreferences ??
            (registerSystemHotkey
@@ -27,6 +30,7 @@ class CaptureTranslateApp extends StatelessWidget {
   final AppWindowService appWindowService;
   final ScreenCaptureService captureService;
   final TranslationService translationService;
+  final GrammarService grammarService;
   final ShortcutPreferences shortcutPreferences;
   final bool registerSystemHotkey;
 
@@ -40,6 +44,7 @@ class CaptureTranslateApp extends StatelessWidget {
         appWindowService: appWindowService,
         captureService: captureService,
         translationService: translationService,
+        grammarService: grammarService,
         shortcutPreferences: shortcutPreferences,
         registerSystemHotkey: registerSystemHotkey,
       ),

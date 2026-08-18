@@ -1,7 +1,9 @@
 import 'package:capture_translate_tool/app.dart';
 import 'package:capture_translate_tool/models/analysis_result.dart';
+import 'package:capture_translate_tool/models/grammar_result.dart';
 import 'package:capture_translate_tool/services/app_window_service.dart';
 import 'package:capture_translate_tool/services/capture_service.dart';
+import 'package:capture_translate_tool/services/grammar_service.dart';
 import 'package:capture_translate_tool/services/shortcut_preferences.dart';
 import 'package:capture_translate_tool/services/translation_service.dart';
 import 'package:flutter/material.dart';
@@ -108,6 +110,49 @@ void main() {
     expect(find.text('Bản dịch nhập tay'), findsOneWidget);
   });
 
+  testWidgets('checks grammar in a separate paste-only workspace', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final grammarService = _FakeGrammarService();
+    await tester.pumpWidget(
+      CaptureTranslateApp(
+        appWindowService: _FakeAppWindowService(),
+        captureService: _FakeCaptureService(),
+        translationService: _FakeTranslationService(),
+        grammarService: grammarService,
+        registerSystemHotkey: false,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('grammar-mode-button')));
+    await tester.pumpAndSettle();
+
+    expect(grammarService.warmUpCount, 1);
+    expect(find.byKey(const Key('capture-button')), findsNothing);
+    expect(find.byKey(const Key('settings-button')), findsOneWidget);
+    expect(find.text('Văn bản cần kiểm tra'), findsOneWidget);
+    expect(find.text('Bản đã sửa'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('grammar-source-text')),
+      'This are a test.',
+    );
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('grammar-check-button')));
+    await tester.tap(find.byKey(const Key('grammar-check-button')));
+    await tester.pumpAndSettle();
+
+    expect(grammarService.lastText, 'This are a test.');
+    expect(grammarService.lastLanguage, 'en-US');
+    expect(find.text('This is a test.'), findsOneWidget);
+    expect(find.text('Đã sửa 1 lỗi'), findsOneWidget);
+  });
+
   testWidgets('Enter translates typed text and Ctrl+N starts a new one', (
     tester,
   ) async {
@@ -189,6 +234,52 @@ void main() {
     expect(translationService.lastSourceText, 'Translate with Enter');
   });
 
+  testWidgets('Ctrl+Tab switches between translation and grammar', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final grammarService = _FakeGrammarService();
+    await tester.pumpWidget(
+      CaptureTranslateApp(
+        appWindowService: _FakeAppWindowService(),
+        captureService: _FakeCaptureService(),
+        translationService: _FakeTranslationService(),
+        grammarService: grammarService,
+        registerSystemHotkey: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _sendShortcut(
+      tester,
+      key: LogicalKeyboardKey.tab,
+      physicalKey: PhysicalKeyboardKey.tab,
+      modifiers: const [
+        (LogicalKeyboardKey.controlLeft, PhysicalKeyboardKey.controlLeft),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Văn bản cần kiểm tra'), findsOneWidget);
+    expect(grammarService.warmUpCount, 1);
+
+    await _sendShortcut(
+      tester,
+      key: LogicalKeyboardKey.tab,
+      physicalKey: PhysicalKeyboardKey.tab,
+      modifiers: const [
+        (LogicalKeyboardKey.controlLeft, PhysicalKeyboardKey.controlLeft),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Văn bản nguồn'), findsOneWidget);
+  });
+
   testWidgets('records and saves a custom capture shortcut', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
@@ -201,6 +292,7 @@ void main() {
         appWindowService: _FakeAppWindowService(),
         captureService: _FakeCaptureService(),
         translationService: _FakeTranslationService(),
+        grammarService: _FakeGrammarService(),
         shortcutPreferences: preferences,
         registerSystemHotkey: false,
       ),
@@ -211,9 +303,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Bản dịch mới'), findsOneWidget);
     expect(find.text('Dịch văn bản nhập tay'), findsOneWidget);
+    expect(find.text('Chuyển Dịch / Ngữ pháp'), findsOneWidget);
     expect(find.byKey(const Key('record-new-shortcut-button')), findsOneWidget);
     expect(
       find.byKey(const Key('record-translate-shortcut-button')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('record-switch-mode-shortcut-button')),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('record-shortcut-button')));
@@ -275,6 +372,38 @@ void main() {
     );
     await tester.pump();
 
+    final recordSwitchButton = find.byKey(
+      const Key('record-switch-mode-shortcut-button'),
+    );
+    await tester.ensureVisible(recordSwitchButton);
+    await tester.tap(recordSwitchButton);
+    await tester.pump();
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.altLeft,
+      physicalKey: PhysicalKeyboardKey.altLeft,
+    );
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.keyS,
+      physicalKey: PhysicalKeyboardKey.keyS,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.keyS,
+      physicalKey: PhysicalKeyboardKey.keyS,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.altLeft,
+      physicalKey: PhysicalKeyboardKey.altLeft,
+    );
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.controlLeft,
+      physicalKey: PhysicalKeyboardKey.controlLeft,
+    );
+    await tester.pump();
+
     await tester.ensureVisible(find.byKey(const Key('save-shortcut-button')));
     await tester.tap(find.byKey(const Key('save-shortcut-button')));
     await tester.pumpAndSettle();
@@ -282,6 +411,7 @@ void main() {
     final saved = await preferences.loadCaptureShortcut();
     final savedNew = await preferences.loadNewTranslationShortcut();
     final savedTranslate = await preferences.loadTranslateShortcut();
+    final savedSwitchMode = await preferences.loadSwitchModeShortcut();
     expect(saved, isNotNull);
     expect(saved!.physicalKey, PhysicalKeyboardKey.keyG);
     expect(
@@ -295,7 +425,24 @@ void main() {
     );
     expect(savedTranslate?.physicalKey, PhysicalKeyboardKey.enter);
     expect(savedTranslate?.modifiers, isEmpty);
+    expect(savedSwitchMode?.physicalKey, PhysicalKeyboardKey.keyS);
+    expect(
+      savedSwitchMode?.modifiers,
+      containsAll([HotKeyModifier.control, HotKeyModifier.alt]),
+    );
     expect(find.text('G'), findsOneWidget);
+
+    await _sendShortcut(
+      tester,
+      key: LogicalKeyboardKey.keyS,
+      physicalKey: PhysicalKeyboardKey.keyS,
+      modifiers: const [
+        (LogicalKeyboardKey.controlLeft, PhysicalKeyboardKey.controlLeft),
+        (LogicalKeyboardKey.altLeft, PhysicalKeyboardKey.altLeft),
+      ],
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Văn bản cần kiểm tra'), findsOneWidget);
   });
 
   testWidgets('resizes without RenderFlex overflow', (tester) async {
@@ -362,6 +509,31 @@ void main() {
     expect(find.text('Nhấn E để tiếp tục'), findsOneWidget);
   });
 
+  testWidgets('grammar workspace stays responsive in a very narrow window', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(280, 200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      CaptureTranslateApp(
+        appWindowService: _FakeAppWindowService(),
+        captureService: _FakeCaptureService(),
+        translationService: _FakeTranslationService(),
+        grammarService: _FakeGrammarService(),
+        registerSystemHotkey: false,
+      ),
+    );
+    await tester.tap(find.byKey(const Key('grammar-mode-button')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('capture-button')), findsNothing);
+    expect(find.byKey(const Key('grammar-source-text')), findsOneWidget);
+  });
+
   testWidgets('hides the app only while selecting the capture region', (
     tester,
   ) async {
@@ -384,6 +556,22 @@ void main() {
 
     expect(events, ['hide', 'capture', 'restore', 'analyze']);
   });
+}
+
+Future<void> _sendShortcut(
+  WidgetTester tester, {
+  required LogicalKeyboardKey key,
+  required PhysicalKeyboardKey physicalKey,
+  required List<(LogicalKeyboardKey, PhysicalKeyboardKey)> modifiers,
+}) async {
+  for (final modifier in modifiers) {
+    await tester.sendKeyDownEvent(modifier.$1, physicalKey: modifier.$2);
+  }
+  await tester.sendKeyDownEvent(key, physicalKey: physicalKey);
+  await tester.sendKeyUpEvent(key, physicalKey: physicalKey);
+  for (final modifier in modifiers.reversed) {
+    await tester.sendKeyUpEvent(modifier.$1, physicalKey: modifier.$2);
+  }
 }
 
 class _FakeAppWindowService implements AppWindowService {
@@ -430,6 +618,30 @@ class _FakeTranslationService implements TranslationService {
   }) async {
     lastSourceText = text;
     return 'Bản dịch nhập tay';
+  }
+
+  @override
+  void close() {}
+}
+
+class _FakeGrammarService implements GrammarService {
+  String? lastText;
+  String? lastLanguage;
+  int warmUpCount = 0;
+
+  @override
+  Future<void> warmUp() async {
+    warmUpCount += 1;
+  }
+
+  @override
+  Future<GrammarResult> checkGrammar({
+    required String text,
+    required String language,
+  }) async {
+    lastText = text;
+    lastLanguage = language;
+    return const GrammarResult(correctedText: 'This is a test.', issueCount: 1);
   }
 
   @override

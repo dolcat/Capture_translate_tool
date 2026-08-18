@@ -54,10 +54,7 @@ class BackendProcessManager {
         [serverScript.path, '--host', '127.0.0.1', '--port', '8765'],
         workingDirectory: serverScript.parent.path,
         runInShell: false,
-        environment: const {
-          'PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK': 'True',
-          'PYTHONUTF8': '1',
-        },
+        environment: _processEnvironment(serverScript.parent),
       );
     } on ProcessException catch (error) {
       throw BackendStartException(
@@ -86,6 +83,30 @@ class BackendProcessManager {
     throw BackendStartException(
       'Backend không khởi động được trong ${startupTimeout.inSeconds} giây.$details',
     );
+  }
+
+  Map<String, String> _processEnvironment(Directory backendDirectory) {
+    final environment = <String, String>{
+      'PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK': 'True',
+      'PYTHONUTF8': '1',
+      'LTP_PATH':
+          '${backendDirectory.path}${Platform.pathSeparator}models'
+          '${Platform.pathSeparator}languagetool',
+    };
+    final bundledJavaBin = Directory(
+      '${backendDirectory.path}${Platform.pathSeparator}java'
+      '${Platform.pathSeparator}bin',
+    );
+    if (File(
+      '${bundledJavaBin.path}${Platform.pathSeparator}java.exe',
+    ).existsSync()) {
+      final systemPath =
+          Platform.environment['PATH'] ?? Platform.environment['Path'] ?? '';
+      environment['PATH'] = systemPath.isEmpty
+          ? bundledJavaBin.path
+          : '${bundledJavaBin.path};$systemPath';
+    }
+    return environment;
   }
 
   Future<bool> _isHealthy() async {

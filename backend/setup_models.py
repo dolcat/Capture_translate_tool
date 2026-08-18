@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 import sys
 import tempfile
 import zipfile
@@ -18,6 +19,9 @@ OCR_DIR = MODELS_DIR / "rapidocr"
 OCR_DET_PATH = OCR_DIR / "ch_PP-OCRv5_det_mobile.onnx"
 OCR_CLS_PATH = OCR_DIR / "ch_ppocr_mobile_v2.0_cls_mobile.onnx"
 OCR_REC_PATH = OCR_DIR / "en_PP-OCRv5_rec_mobile.onnx"
+LANGUAGE_TOOL_DIR = MODELS_DIR / "languagetool"
+LANGUAGE_TOOL_VERSION = "6.8"
+os.environ["LTP_PATH"] = str(LANGUAGE_TOOL_DIR)
 
 
 def _download(url: str, destination: Path) -> None:
@@ -113,10 +117,26 @@ def prepare_ocr_models() -> None:
     print(f"RapidOCR ONNX models are ready: {OCR_DIR}")
 
 
+def prepare_grammar_model() -> None:
+    print("Preparing LanguageTool local English grammar checker...")
+    import language_tool_python
+
+    LANGUAGE_TOOL_DIR.mkdir(parents=True, exist_ok=True)
+    with language_tool_python.LanguageTool(
+        "en-US",
+        language_tool_download_version=LANGUAGE_TOOL_VERSION,
+    ) as tool:
+        corrected = tool.correct("This are a test.")
+    if corrected == "This are a test.":
+        raise RuntimeError("LanguageTool did not correct the validation sentence")
+    print(f"LanguageTool is ready: {LANGUAGE_TOOL_DIR}")
+
+
 def main() -> int:
     try:
         prepare_translation_model()
         prepare_ocr_models()
+        prepare_grammar_model()
     except Exception as error:
         print(f"Model setup failed: {error}", file=sys.stderr)
         return 1

@@ -18,7 +18,10 @@ class TranslationPanel extends StatelessWidget {
     this.textKey,
     this.controller,
     this.focusNode,
-    this.onTranslate,
+    this.onAction,
+    this.actionKey,
+    this.actionIcon = Icons.translate_rounded,
+    this.actionLabel = 'Dịch',
     super.key,
   });
 
@@ -35,7 +38,10 @@ class TranslationPanel extends StatelessWidget {
   final Key? textKey;
   final TextEditingController? controller;
   final FocusNode? focusNode;
-  final VoidCallback? onTranslate;
+  final VoidCallback? onAction;
+  final Key? actionKey;
+  final IconData actionIcon;
+  final String actionLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -49,44 +55,59 @@ class TranslationPanel extends StatelessWidget {
         decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: AppColors.border)),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                hasText
-                    ? '${currentText.characters.length} ký tự'
-                    : 'Chưa có nội dung',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(fontSize: 12),
-              ),
-            ),
-            IconButton(
-              onPressed: hasText
-                  ? () async {
-                      await Clipboard.setData(ClipboardData(text: currentText));
-                      onCopied();
-                    }
-                  : null,
-              tooltip: 'Sao chép',
-              icon: const Icon(Icons.content_copy_rounded, size: 19),
-            ),
-            if (onTranslate != null) ...[
-              const SizedBox(width: 4),
-              FilledButton.icon(
-                key: const Key('translate-button'),
-                onPressed: hasText && !isLoading ? onTranslate : null,
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final useCompactAction = constraints.maxWidth < 250;
+            return Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    hasText
+                        ? '${currentText.characters.length} ký tự'
+                        : 'Chưa có nội dung',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(fontSize: 12),
+                  ),
                 ),
-                icon: const Icon(Icons.translate_rounded, size: 17),
-                label: const Text('Dịch'),
-              ),
-            ],
-          ],
+                IconButton(
+                  onPressed: hasText
+                      ? () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: currentText),
+                          );
+                          onCopied();
+                        }
+                      : null,
+                  tooltip: 'Sao chép',
+                  icon: const Icon(Icons.content_copy_rounded, size: 19),
+                ),
+                if (onAction != null) ...[
+                  const SizedBox(width: 4),
+                  if (useCompactAction)
+                    IconButton.filled(
+                      key: actionKey,
+                      onPressed: hasText && !isLoading ? onAction : null,
+                      tooltip: actionLabel,
+                      icon: Icon(actionIcon, size: 18),
+                    )
+                  else
+                    FilledButton.icon(
+                      key: actionKey,
+                      onPressed: hasText && !isLoading ? onAction : null,
+                      style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      icon: Icon(actionIcon, size: 17),
+                      label: Text(actionLabel),
+                    ),
+                ],
+              ],
+            );
+          },
         ),
       );
     }

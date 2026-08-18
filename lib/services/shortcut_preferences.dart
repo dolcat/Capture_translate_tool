@@ -10,12 +10,15 @@ abstract interface class ShortcutPreferences {
 
   Future<HotKey?> loadTranslateShortcut();
 
+  Future<HotKey?> loadSwitchModeShortcut();
+
   Future<void> saveCaptureShortcut(HotKey hotKey);
 
   Future<void> saveShortcuts({
     required HotKey capture,
     required HotKey newTranslation,
     required HotKey translate,
+    required HotKey switchMode,
   });
 }
 
@@ -28,6 +31,7 @@ class FileShortcutPreferences implements ShortcutPreferences {
   static const _captureKey = 'captureShortcut';
   static const _newTranslationKey = 'newTranslationShortcut';
   static const _translateKey = 'translateShortcut';
+  static const _switchModeKey = 'switchModeShortcut';
 
   static File _defaultSettingsFile() {
     final appData = Platform.environment['APPDATA'];
@@ -88,6 +92,9 @@ class FileShortcutPreferences implements ShortcutPreferences {
   Future<HotKey?> loadTranslateShortcut() => _loadShortcut(_translateKey);
 
   @override
+  Future<HotKey?> loadSwitchModeShortcut() => _loadShortcut(_switchModeKey);
+
+  @override
   Future<void> saveCaptureShortcut(HotKey hotKey) async {
     final settings = await _readSettings();
     settings[_captureKey] = hotKey.toJson();
@@ -99,12 +106,14 @@ class FileShortcutPreferences implements ShortcutPreferences {
     required HotKey capture,
     required HotKey newTranslation,
     required HotKey translate,
+    required HotKey switchMode,
   }) async {
     final settings = await _readSettings();
     settings
       ..[_captureKey] = capture.toJson()
       ..[_newTranslationKey] = newTranslation.toJson()
-      ..[_translateKey] = translate.toJson();
+      ..[_translateKey] = translate.toJson()
+      ..[_switchModeKey] = switchMode.toJson();
     await _writeSettings(settings);
   }
 }
@@ -113,6 +122,7 @@ class MemoryShortcutPreferences implements ShortcutPreferences {
   HotKey? _captureShortcut;
   HotKey? _newTranslationShortcut;
   HotKey? _translateShortcut;
+  HotKey? _switchModeShortcut;
 
   @override
   Future<HotKey?> loadCaptureShortcut() async => _captureShortcut;
@@ -124,6 +134,9 @@ class MemoryShortcutPreferences implements ShortcutPreferences {
   Future<HotKey?> loadTranslateShortcut() async => _translateShortcut;
 
   @override
+  Future<HotKey?> loadSwitchModeShortcut() async => _switchModeShortcut;
+
+  @override
   Future<void> saveCaptureShortcut(HotKey hotKey) async {
     _captureShortcut = hotKey;
   }
@@ -133,9 +146,11 @@ class MemoryShortcutPreferences implements ShortcutPreferences {
     required HotKey capture,
     required HotKey newTranslation,
     required HotKey translate,
+    required HotKey switchMode,
   }) async {
     _captureShortcut = capture;
     _newTranslationShortcut = newTranslation;
     _translateShortcut = translate;
+    _switchModeShortcut = switchMode;
   }
 }

@@ -1,5 +1,6 @@
 param(
     [string]$PythonVersion = '3.11.9',
+    [string]$JavaHome = '',
     [switch]$SkipFlutterBuild
 )
 
@@ -54,12 +55,39 @@ if (-not (Test-Path -LiteralPath $pythonArchive)) {
 
 $backendRoot = Join-Path $stageRoot 'data\backend'
 $pythonRoot = Join-Path $backendRoot 'python'
+$javaRoot = Join-Path $backendRoot 'java'
 Assert-ChildPath -Path $pythonRoot -Parent $stageRoot
 if (Test-Path -LiteralPath $pythonRoot) {
     Remove-Item -LiteralPath $pythonRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Path $pythonRoot | Out-Null
 Expand-Archive -LiteralPath $pythonArchive -DestinationPath $pythonRoot -Force
+
+if (-not $JavaHome) {
+    if ($env:JAVA_HOME) {
+        $JavaHome = $env:JAVA_HOME
+    }
+    else {
+        $javaCommand = Get-Command java.exe -ErrorAction SilentlyContinue
+        if ($javaCommand) {
+            $javaSettings = (& $javaCommand.Source -XshowSettings:properties -version 2>&1 | Out-String)
+            $javaHomeMatch = [regex]::Match($javaSettings, '(?m)^\s*java\.home\s*=\s*(.+?)\s*$')
+            if ($javaHomeMatch.Success) {
+                $JavaHome = $javaHomeMatch.Groups[1].Value
+            }
+        }
+    }
+}
+if (-not $JavaHome -or -not (Test-Path -LiteralPath (Join-Path $JavaHome 'bin\java.exe'))) {
+    throw 'Java 17 was not found. Install Java 17 or pass -JavaHome with a Java 17 runtime path.'
+}
+$JavaHome = (Resolve-Path -LiteralPath $JavaHome).Path
+Assert-ChildPath -Path $javaRoot -Parent $stageRoot
+if (Test-Path -LiteralPath $javaRoot) {
+    Remove-Item -LiteralPath $javaRoot -Recurse -Force
+}
+Write-Host 'Bundling Java runtime for LanguageTool...'
+Copy-Item -LiteralPath $JavaHome -Destination $javaRoot -Recurse -Force
 
 $pythonMinor = ($PythonVersion.Split('.')[0..1] -join '')
 $pthFile = Join-Path $pythonRoot "python$pythonMinor._pth"
@@ -121,9 +149,11 @@ Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $pythonRoot -Forc
 
 $embeddedPython = Join-Path $pythonRoot 'python.exe'
 $env:PYTHONUTF8 = '1'
+$env:LTP_PATH = Join-Path $backendRoot 'models\languagetool'
+$env:PATH = (Join-Path $javaRoot 'bin') + ';' + $env:PATH
 Push-Location $backendRoot
 try {
-    & $embeddedPython -c "import sys; sys.path.insert(0, '.'); import ctranslate2, sentencepiece, fastapi, uvicorn, onnxruntime, rapidocr; from server import engines; engines.ensure_ready(); assert engines.translate('Hello world!')"
+    & $embeddedPython -c "import sys; sys.path.insert(0, '.'); import ctranslate2, sentencepiece, fastapi, uvicorn, onnxruntime, rapidocr, language_tool_python; from server import engines; engines.ensure_ready(); assert engines.translate('Hello world!'); result = engines.check_grammar('This are wrong.', 'en-US'); assert result['corrected'] != 'This are wrong.'; engines.close()"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 finally {

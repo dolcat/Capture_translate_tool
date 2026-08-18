@@ -5,3 +5,4 @@ onnxruntime==1.28.0
 ctranslate2==4.8.1
 sentencepiece==0.2.2
 requests==2.34.2
+language_tool_python==3.4.0

@@ -9,11 +9,16 @@ import '../core/app_theme.dart';
 import '../models/analysis_result.dart';
 import '../services/app_window_service.dart';
 import '../services/capture_service.dart';
+import '../services/grammar_service.dart';
 import '../services/shortcut_preferences.dart';
 import '../services/translation_service.dart';
 import '../widgets/translation_panel.dart';
 
 enum WorkspaceStatus { idle, capturing, analyzing, translating, success, error }
+
+enum GrammarStatus { idle, warmingUp, checking, success, error }
+
+enum WorkspaceMode { translation, grammar }
 
 class _NewTranslationIntent extends Intent {
   const _NewTranslationIntent();
@@ -32,6 +37,7 @@ class TranslationWorkspace extends StatefulWidget {
     required this.appWindowService,
     required this.captureService,
     required this.translationService,
+    required this.grammarService,
     required this.shortcutPreferences,
     required this.registerSystemHotkey,
     super.key,
@@ -40,6 +46,7 @@ class TranslationWorkspace extends StatefulWidget {
   final AppWindowService appWindowService;
   final ScreenCaptureService captureService;
   final TranslationService translationService;
+  final GrammarService grammarService;
   final ShortcutPreferences shortcutPreferences;
   final bool registerSystemHotkey;
 
@@ -52,28 +59,67 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   static const _targetLanguage = 'vi';
 
   WorkspaceStatus _status = WorkspaceStatus.idle;
+  GrammarStatus _grammarStatus = GrammarStatus.idle;
+  WorkspaceMode _mode = WorkspaceMode.translation;
   AnalysisResult? _result;
   final TextEditingController _sourceController = TextEditingController();
   final FocusNode _sourceFocusNode = FocusNode();
+  final TextEditingController _grammarController = TextEditingController();
+  final FocusNode _grammarFocusNode = FocusNode();
   String _translatedText = '';
+  String _correctedText = '';
+  int _grammarIssueCount = 0;
+  Future<void>? _grammarWarmUpFuture;
+  bool _grammarIsReady = false;
   String? _lastImagePath;
   String? _errorMessage;
+  String? _grammarErrorMessage;
   HotKey _configuredHotkey = _defaultCaptureHotkey();
   HotKey _newTranslationHotkey = _defaultNewTranslationHotkey();
   HotKey _translateHotkey = _defaultTranslateHotkey();
+  HotKey _switchModeHotkey = _defaultSwitchModeHotkey();
   HotKey? _captureHotkey;
   bool _lastActionWasTextTranslation = false;
+  bool _isSettingsOpen = false;
 
   bool get _isBusy =>
       _status == WorkspaceStatus.capturing ||
       _status == WorkspaceStatus.analyzing ||
       _status == WorkspaceStatus.translating;
 
+  bool get _isGrammarBusy => _grammarStatus == GrammarStatus.checking;
+
+  bool get _isCurrentModeBusy =>
+      _mode == WorkspaceMode.translation ? _isBusy : _isGrammarBusy;
+
   @override
   void initState() {
     super.initState();
     _sourceFocusNode.addListener(_handleSourceFocusChanged);
+    HardwareKeyboard.instance.addHandler(_handleSwitchModeKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initializeShortcuts());
+  }
+
+  bool _handleSwitchModeKeyEvent(KeyEvent event) {
+    if (_isSettingsOpen || event is! KeyDownEvent) return false;
+    if (event.physicalKey != _switchModeHotkey.physicalKey) return false;
+
+    final modifiers = _switchModeHotkey.modifiers ?? const <HotKeyModifier>[];
+    final keyboard = HardwareKeyboard.instance;
+    final matchesModifiers =
+        keyboard.isControlPressed ==
+            modifiers.contains(HotKeyModifier.control) &&
+        keyboard.isAltPressed == modifiers.contains(HotKeyModifier.alt) &&
+        keyboard.isShiftPressed == modifiers.contains(HotKeyModifier.shift) &&
+        keyboard.isMetaPressed == modifiers.contains(HotKeyModifier.meta);
+    if (!matchesModifiers) return false;
+
+    _setMode(
+      _mode == WorkspaceMode.translation
+          ? WorkspaceMode.grammar
+          : WorkspaceMode.translation,
+    );
+    return true;
   }
 
   static HotKey _defaultCaptureHotkey() {
@@ -100,6 +146,14 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     );
   }
 
+  static HotKey _defaultSwitchModeHotkey() {
+    return HotKey(
+      key: PhysicalKeyboardKey.tab,
+      modifiers: [HotKeyModifier.control],
+      scope: HotKeyScope.inapp,
+    );
+  }
+
   void _handleSourceFocusChanged() {
     if (mounted) setState(() {});
   }
@@ -109,6 +163,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       widget.shortcutPreferences.loadCaptureShortcut(),
       widget.shortcutPreferences.loadNewTranslationShortcut(),
       widget.shortcutPreferences.loadTranslateShortcut(),
+      widget.shortcutPreferences.loadSwitchModeShortcut(),
     ]);
     if (!mounted) return;
     final hotkey = saved[0] ?? _configuredHotkey;
@@ -116,6 +171,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       _configuredHotkey = hotkey;
       _newTranslationHotkey = saved[1] ?? _newTranslationHotkey;
       _translateHotkey = saved[2] ?? _translateHotkey;
+      _switchModeHotkey = saved[3] ?? _switchModeHotkey;
     });
     if (widget.registerSystemHotkey) {
       await _activateHotkey(hotkey);
@@ -126,7 +182,9 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     return hotKeyManager.register(
       hotkey,
       keyDownHandler: (_) {
-        if (!_isBusy) unawaited(_captureAndTranslate());
+        if (_mode == WorkspaceMode.translation && !_isBusy) {
+          unawaited(_captureAndTranslate());
+        }
       },
     );
   }
@@ -155,6 +213,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     HotKey capture,
     HotKey newTranslation,
     HotKey translate,
+    HotKey switchMode,
   ) async {
     final previous = _configuredHotkey;
     if (widget.registerSystemHotkey) {
@@ -166,6 +225,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
         capture: capture,
         newTranslation: newTranslation,
         translate: translate,
+        switchMode: switchMode,
       );
     } catch (error) {
       if (widget.registerSystemHotkey) await _activateHotkey(previous);
@@ -176,6 +236,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
         _configuredHotkey = capture;
         _newTranslationHotkey = newTranslation;
         _translateHotkey = translate;
+        _switchModeHotkey = switchMode;
       });
     }
     return null;
@@ -304,6 +365,72 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     }
   }
 
+  Future<void> _checkGrammar() async {
+    if (_isGrammarBusy) return;
+    final sourceText = _grammarController.text.trim();
+    if (sourceText.isEmpty) {
+      _showGrammarError('Hãy nhập hoặc dán văn bản tiếng Anh cần kiểm tra.');
+      return;
+    }
+
+    setState(() {
+      _grammarStatus = GrammarStatus.checking;
+      _grammarErrorMessage = null;
+    });
+    try {
+      final result = await widget.grammarService.checkGrammar(
+        text: sourceText,
+        language: 'en-US',
+      );
+      if (!mounted) return;
+      setState(() {
+        _correctedText = result.correctedText;
+        _grammarIssueCount = result.issueCount;
+        _grammarIsReady = true;
+        _grammarStatus = GrammarStatus.success;
+      });
+    } on GrammarServiceException catch (error) {
+      _showGrammarError(error.message);
+    } catch (error) {
+      _showGrammarError('Không thể kiểm tra ngữ pháp: $error');
+    }
+  }
+
+  Future<void> _warmUpGrammar() async {
+    if (_grammarIsReady) return;
+    final activeWarmUp = _grammarWarmUpFuture;
+    if (activeWarmUp != null) return activeWarmUp;
+
+    if (mounted) {
+      setState(() {
+        _grammarStatus = GrammarStatus.warmingUp;
+        _grammarErrorMessage = null;
+      });
+    }
+
+    final warmUp = widget.grammarService.warmUp();
+    _grammarWarmUpFuture = warmUp;
+    try {
+      await warmUp;
+      _grammarIsReady = true;
+      if (mounted && _grammarStatus == GrammarStatus.warmingUp) {
+        setState(() => _grammarStatus = GrammarStatus.idle);
+      }
+    } on GrammarServiceException catch (error) {
+      if (mounted && _grammarStatus == GrammarStatus.warmingUp) {
+        _showGrammarError(error.message);
+      }
+    } catch (error) {
+      if (mounted && _grammarStatus == GrammarStatus.warmingUp) {
+        _showGrammarError('Không thể khởi động LanguageTool local: $error');
+      }
+    } finally {
+      if (identical(_grammarWarmUpFuture, warmUp)) {
+        _grammarWarmUpFuture = null;
+      }
+    }
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     setState(() {
@@ -312,8 +439,27 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     });
   }
 
+  void _showGrammarError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _grammarStatus = GrammarStatus.error;
+      _grammarErrorMessage = message;
+    });
+  }
+
   void _startNewSession() {
-    if (_isBusy) return;
+    if (_isCurrentModeBusy) return;
+    if (_mode == WorkspaceMode.grammar) {
+      setState(() {
+        _grammarStatus = GrammarStatus.idle;
+        _grammarController.clear();
+        _correctedText = '';
+        _grammarIssueCount = 0;
+        _grammarErrorMessage = null;
+      });
+      _grammarFocusNode.requestFocus();
+      return;
+    }
     setState(() {
       _status = WorkspaceStatus.idle;
       _result = null;
@@ -324,6 +470,22 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       _lastActionWasTextTranslation = false;
     });
     _sourceFocusNode.requestFocus();
+  }
+
+  void _setMode(WorkspaceMode mode) {
+    if (_isCurrentModeBusy || _mode == mode) return;
+    setState(() => _mode = mode);
+    if (mode == WorkspaceMode.grammar) {
+      unawaited(_warmUpGrammar());
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (mode == WorkspaceMode.grammar) {
+        _grammarFocusNode.requestFocus();
+      } else {
+        _sourceFocusNode.requestFocus();
+      }
+    });
   }
 
   void _showCopiedMessage(String label) {
@@ -338,23 +500,32 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       );
   }
 
-  void _showSetupDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (context) => _ShortcutSettingsDialog(
-        currentCaptureHotkey: _configuredHotkey,
-        currentNewTranslationHotkey: _newTranslationHotkey,
-        currentTranslateHotkey: _translateHotkey,
-        defaultCaptureHotkey: _defaultCaptureHotkey(),
-        defaultNewTranslationHotkey: _defaultNewTranslationHotkey(),
-        defaultTranslateHotkey: _defaultTranslateHotkey(),
-        onSave: _saveShortcuts,
-      ),
-    );
+  Future<void> _showSetupDialog() async {
+    if (_isSettingsOpen) return;
+    _isSettingsOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => _ShortcutSettingsDialog(
+          currentCaptureHotkey: _configuredHotkey,
+          currentNewTranslationHotkey: _newTranslationHotkey,
+          currentTranslateHotkey: _translateHotkey,
+          currentSwitchModeHotkey: _switchModeHotkey,
+          defaultCaptureHotkey: _defaultCaptureHotkey(),
+          defaultNewTranslationHotkey: _defaultNewTranslationHotkey(),
+          defaultTranslateHotkey: _defaultTranslateHotkey(),
+          defaultSwitchModeHotkey: _defaultSwitchModeHotkey(),
+          onSave: _saveShortcuts,
+        ),
+      );
+    } finally {
+      _isSettingsOpen = false;
+    }
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleSwitchModeKeyEvent);
     final hotkey = _captureHotkey;
     if (hotkey != null) {
       unawaited(hotKeyManager.unregister(hotkey));
@@ -363,22 +534,27 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     _sourceFocusNode
       ..removeListener(_handleSourceFocusChanged)
       ..dispose();
+    _grammarController.dispose();
+    _grammarFocusNode.dispose();
     widget.translationService.close();
+    widget.grammarService.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final shortcuts = <ShortcutActivator, Intent>{
-      _activatorFor(_newTranslationHotkey): const _NewTranslationIntent(),
-      if (_sourceFocusNode.hasFocus)
-        _activatorFor(_translateHotkey): const _TranslateTypedTextIntent(),
-      if (_sourceFocusNode.hasFocus)
-        const SingleActivator(
-          LogicalKeyboardKey.enter,
-          shift: true,
-          includeRepeats: false,
-        ): const _InsertNewlineIntent(),
+      if (_mode == WorkspaceMode.translation) ...{
+        _activatorFor(_newTranslationHotkey): const _NewTranslationIntent(),
+        if (_sourceFocusNode.hasFocus)
+          _activatorFor(_translateHotkey): const _TranslateTypedTextIntent(),
+        if (_sourceFocusNode.hasFocus)
+          const SingleActivator(
+            LogicalKeyboardKey.enter,
+            shift: true,
+            includeRepeats: false,
+          ): const _InsertNewlineIntent(),
+      },
     };
     return Shortcuts(
       shortcuts: shortcuts,
@@ -421,7 +597,9 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _AppHeader(
-                        isBusy: _isBusy,
+                        mode: _mode,
+                        isBusy: _isCurrentModeBusy,
+                        onModeChanged: _setMode,
                         onNew: _startNewSession,
                         onSettings: _showSetupDialog,
                         onCapture: _captureAndTranslate,
@@ -440,30 +618,50 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                _WorkspaceIntro(
-                                  onCapture: _captureAndTranslate,
-                                  shortcutLabels: _shortcutLabels,
-                                ),
+                                if (_mode == WorkspaceMode.translation)
+                                  _WorkspaceIntro(
+                                    onCapture: _captureAndTranslate,
+                                    shortcutLabels: _shortcutLabels,
+                                  )
+                                else
+                                  const _GrammarIntro(),
                                 SizedBox(
                                   height: constraints.maxWidth < 480 ? 16 : 22,
                                 ),
-                                _TranslationCard(
-                                  status: _status,
-                                  result: _result,
-                                  lastImagePath: _lastImagePath,
-                                  errorMessage: _errorMessage,
-                                  sourceController: _sourceController,
-                                  sourceFocusNode: _sourceFocusNode,
-                                  translatedText: _translatedText,
-                                  onTranslate: _translateTypedText,
-                                  onRetry: _lastActionWasTextTranslation
-                                      ? _translateTypedText
-                                      : _captureAndTranslate,
-                                  onCopyOriginal: () =>
-                                      _showCopiedMessage('văn bản nhận diện'),
-                                  onCopyTranslation: () =>
-                                      _showCopiedMessage('bản dịch'),
-                                ),
+                                if (_mode == WorkspaceMode.translation)
+                                  _TranslationCard(
+                                    status: _status,
+                                    result: _result,
+                                    lastImagePath: _lastImagePath,
+                                    errorMessage: _errorMessage,
+                                    sourceController: _sourceController,
+                                    sourceFocusNode: _sourceFocusNode,
+                                    translatedText: _translatedText,
+                                    onTranslate: _translateTypedText,
+                                    onRetry: _lastActionWasTextTranslation
+                                        ? _translateTypedText
+                                        : _captureAndTranslate,
+                                    onCopyOriginal: () =>
+                                        _showCopiedMessage('văn bản nhận diện'),
+                                    onCopyTranslation: () =>
+                                        _showCopiedMessage('bản dịch'),
+                                  )
+                                else
+                                  _GrammarCard(
+                                    status: _grammarStatus,
+                                    errorMessage: _grammarErrorMessage,
+                                    sourceController: _grammarController,
+                                    sourceFocusNode: _grammarFocusNode,
+                                    correctedText: _correctedText,
+                                    issueCount: _grammarIssueCount,
+                                    onCheck: _checkGrammar,
+                                    onRetry: _checkGrammar,
+                                    onCopyOriginal: () => _showCopiedMessage(
+                                      'văn bản cần kiểm tra',
+                                    ),
+                                    onCopyCorrection: () =>
+                                        _showCopiedMessage('bản đã sửa'),
+                                  ),
                                 const SizedBox(height: 18),
                                 const _PrivacyFooter(),
                               ],
@@ -485,13 +683,17 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
 
 class _AppHeader extends StatelessWidget {
   const _AppHeader({
+    required this.mode,
     required this.isBusy,
+    required this.onModeChanged,
     required this.onNew,
     required this.onSettings,
     required this.onCapture,
   });
 
+  final WorkspaceMode mode;
   final bool isBusy;
+  final ValueChanged<WorkspaceMode> onModeChanged;
   final VoidCallback onNew;
   final VoidCallback onSettings;
   final VoidCallback onCapture;
@@ -500,8 +702,8 @@ class _AppHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 720;
-        final useVerticalActions = constraints.maxWidth < 360;
+        final isCompact = constraints.maxWidth < 900;
+        final useVerticalActions = constraints.maxWidth < 260;
         final showBrandName = constraints.maxWidth >= 300;
         final showOfflineBadge = constraints.maxWidth >= 430;
         final padding = EdgeInsets.symmetric(
@@ -567,6 +769,28 @@ class _AppHeader extends StatelessWidget {
           );
         }
 
+        final modeSelector = SegmentedButton<WorkspaceMode>(
+          key: const Key('workspace-mode-selector'),
+          segments: const [
+            ButtonSegment(
+              value: WorkspaceMode.translation,
+              icon: Icon(Icons.translate_rounded, size: 17),
+              label: Text('Dịch'),
+            ),
+            ButtonSegment(
+              value: WorkspaceMode.grammar,
+              icon: Icon(Icons.spellcheck_rounded, size: 17),
+              label: Text('Ngữ pháp', key: Key('grammar-mode-button')),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: isBusy
+              ? null
+              : (selection) => onModeChanged(selection.single),
+          showSelectedIcon: false,
+          style: const ButtonStyle(visualDensity: VisualDensity.compact),
+        );
+
         final settingsButton = IconButton(
           key: const Key('settings-button'),
           onPressed: onSettings,
@@ -581,18 +805,24 @@ class _AppHeader extends StatelessWidget {
             child: Row(
               children: [
                 buildBrand(),
+                const SizedBox(width: 24),
+                modeSelector,
                 const Spacer(),
                 settingsButton,
                 const SizedBox(width: 5),
                 buildNewButton(),
-                const SizedBox(width: 9),
-                buildCaptureButton(),
+                if (mode == WorkspaceMode.translation) ...[
+                  const SizedBox(width: 9),
+                  buildCaptureButton(),
+                ],
               ],
             ),
           );
         }
 
-        final actionButtons = useVerticalActions
+        final actionButtons = mode == WorkspaceMode.grammar
+            ? Align(alignment: Alignment.centerRight, child: buildNewButton())
+            : useVerticalActions
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -616,6 +846,8 @@ class _AppHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [buildBrand(), const Spacer(), settingsButton]),
+              const SizedBox(height: 10),
+              Align(alignment: Alignment.centerLeft, child: modeSelector),
               const SizedBox(height: 10),
               actionButtons,
             ],
@@ -728,6 +960,28 @@ class _WorkspaceIntro extends StatelessWidget {
   }
 }
 
+class _GrammarIntro extends StatelessWidget {
+  const _GrammarIntro();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Dán. Kiểm tra. Hoàn thiện.',
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
+        const SizedBox(height: 7),
+        Text(
+          'Dán văn bản tiếng Anh, kiểm tra ngữ pháp và nhận lại phiên bản đã sửa.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ],
+    );
+  }
+}
+
 class _TranslationCard extends StatelessWidget {
   const _TranslationCard({
     required this.status,
@@ -809,7 +1063,8 @@ class _TranslationCard extends StatelessWidget {
                     textKey: const Key('recognized-text'),
                     controller: sourceController,
                     focusNode: sourceFocusNode,
-                    onTranslate: onTranslate,
+                    onAction: onTranslate,
+                    actionKey: const Key('translate-button'),
                     onCopied: onCopyOriginal,
                   ),
                   TranslationPanel(
@@ -853,6 +1108,174 @@ class _TranslationCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _GrammarCard extends StatelessWidget {
+  const _GrammarCard({
+    required this.status,
+    required this.errorMessage,
+    required this.sourceController,
+    required this.sourceFocusNode,
+    required this.correctedText,
+    required this.issueCount,
+    required this.onCheck,
+    required this.onRetry,
+    required this.onCopyOriginal,
+    required this.onCopyCorrection,
+  });
+
+  final GrammarStatus status;
+  final String? errorMessage;
+  final TextEditingController sourceController;
+  final FocusNode sourceFocusNode;
+  final String correctedText;
+  final int issueCount;
+  final VoidCallback onCheck;
+  final VoidCallback onRetry;
+  final VoidCallback onCopyOriginal;
+  final VoidCallback onCopyCorrection;
+
+  @override
+  Widget build(BuildContext context) {
+    final isLoading = status == GrammarStatus.checking;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A101828),
+            blurRadius: 18,
+            offset: Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _GrammarBar(status: status, issueCount: issueCount),
+            if (status == GrammarStatus.error && errorMessage != null) ...[
+              const SizedBox(height: 12),
+              _ErrorBanner(message: errorMessage!, onRetry: onRetry),
+            ],
+            const SizedBox(height: 14),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final panels = [
+                  TranslationPanel(
+                    title: 'Văn bản cần kiểm tra',
+                    language: 'English (US)',
+                    text: '',
+                    emptyTitle: 'Chưa có văn bản',
+                    emptyDescription: 'Nhập hoặc dán tiếng Anh tại đây.',
+                    emptyIcon: Icons.content_paste_rounded,
+                    backgroundColor: Colors.white,
+                    isLoading: isLoading,
+                    badge: 'English (US)',
+                    textKey: const Key('grammar-source-text'),
+                    controller: sourceController,
+                    focusNode: sourceFocusNode,
+                    onAction: onCheck,
+                    actionKey: const Key('grammar-check-button'),
+                    actionIcon: Icons.spellcheck_rounded,
+                    actionLabel: 'Kiểm tra',
+                    onCopied: onCopyOriginal,
+                  ),
+                  TranslationPanel(
+                    title: 'Bản đã sửa',
+                    language: 'English (US)',
+                    text: correctedText,
+                    emptyTitle: 'Bản chính xác sẽ xuất hiện ở đây',
+                    emptyDescription:
+                        'LanguageTool xử lý ngữ pháp hoàn toàn trên máy.',
+                    emptyIcon: Icons.fact_check_outlined,
+                    backgroundColor: AppColors.translationSurface,
+                    isLoading: isLoading,
+                    badge: 'LanguageTool',
+                    textKey: const Key('grammar-corrected-text'),
+                    onCopied: onCopyCorrection,
+                  ),
+                ];
+
+                if (constraints.maxWidth < 820) {
+                  return Column(
+                    children: [
+                      SizedBox(height: 430, child: panels.first),
+                      const SizedBox(height: 12),
+                      SizedBox(height: 350, child: panels.last),
+                    ],
+                  );
+                }
+
+                return SizedBox(
+                  height: 390,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: panels.first),
+                      const SizedBox(width: 12),
+                      Expanded(child: panels.last),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GrammarBar extends StatelessWidget {
+  const _GrammarBar({required this.status, required this.issueCount});
+
+  final GrammarStatus status;
+  final int issueCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusText = switch (status) {
+      GrammarStatus.idle => 'Sẵn sàng',
+      GrammarStatus.warmingUp => 'Đang khởi động LanguageTool…',
+      GrammarStatus.checking => 'Đang kiểm tra ngữ pháp…',
+      GrammarStatus.success when issueCount == 0 => 'Không phát hiện lỗi',
+      GrammarStatus.success => 'Đã sửa $issueCount lỗi',
+      GrammarStatus.error => 'Cần thử lại',
+    };
+    final statusColor = switch (status) {
+      GrammarStatus.success => AppColors.success,
+      GrammarStatus.error => AppColors.error,
+      _ => AppColors.primaryDark,
+    };
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      child: Row(
+        children: [
+          const _LanguageLabel(label: 'English (US)', isActive: true),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Icon(
+              Icons.arrow_forward_rounded,
+              size: 19,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const Flexible(
+            child: _LanguageLabel(label: 'English đã sửa', isActive: true),
+          ),
+          const Spacer(),
+          Flexible(
+            child: _StatusBadge(text: statusText, color: statusColor),
+          ),
+        ],
       ),
     );
   }
@@ -1123,22 +1546,27 @@ class _ShortcutSettingsDialog extends StatefulWidget {
     required this.currentCaptureHotkey,
     required this.currentNewTranslationHotkey,
     required this.currentTranslateHotkey,
+    required this.currentSwitchModeHotkey,
     required this.defaultCaptureHotkey,
     required this.defaultNewTranslationHotkey,
     required this.defaultTranslateHotkey,
+    required this.defaultSwitchModeHotkey,
     required this.onSave,
   });
 
   final HotKey currentCaptureHotkey;
   final HotKey currentNewTranslationHotkey;
   final HotKey currentTranslateHotkey;
+  final HotKey currentSwitchModeHotkey;
   final HotKey defaultCaptureHotkey;
   final HotKey defaultNewTranslationHotkey;
   final HotKey defaultTranslateHotkey;
+  final HotKey defaultSwitchModeHotkey;
   final Future<String?> Function(
     HotKey capture,
     HotKey newTranslation,
     HotKey translate,
+    HotKey switchMode,
   )
   onSave;
 
@@ -1147,7 +1575,7 @@ class _ShortcutSettingsDialog extends StatefulWidget {
       _ShortcutSettingsDialogState();
 }
 
-enum _ShortcutTarget { capture, newTranslation, translate }
+enum _ShortcutTarget { capture, newTranslation, translate, switchMode }
 
 class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
   static const _supportedModifiers = {
@@ -1160,6 +1588,7 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
   late HotKey _captureCandidate;
   late HotKey _newTranslationCandidate;
   late HotKey _translateCandidate;
+  late HotKey _switchModeCandidate;
   _ShortcutTarget? _recordingTarget;
   bool _isSaving = false;
   String? _message;
@@ -1170,6 +1599,7 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
     _captureCandidate = widget.currentCaptureHotkey;
     _newTranslationCandidate = widget.currentNewTranslationHotkey;
     _translateCandidate = widget.currentTranslateHotkey;
+    _switchModeCandidate = widget.currentSwitchModeHotkey;
   }
 
   bool _isModifierKey(PhysicalKeyboardKey key) {
@@ -1182,12 +1612,14 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
     _ShortcutTarget.capture => _captureCandidate,
     _ShortcutTarget.newTranslation => _newTranslationCandidate,
     _ShortcutTarget.translate => _translateCandidate,
+    _ShortcutTarget.switchMode => _switchModeCandidate,
   };
 
   HotKey _defaultFor(_ShortcutTarget target) => switch (target) {
     _ShortcutTarget.capture => widget.defaultCaptureHotkey,
     _ShortcutTarget.newTranslation => widget.defaultNewTranslationHotkey,
     _ShortcutTarget.translate => widget.defaultTranslateHotkey,
+    _ShortcutTarget.switchMode => widget.defaultSwitchModeHotkey,
   };
 
   void _setCandidate(_ShortcutTarget target, HotKey hotkey) {
@@ -1198,6 +1630,8 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
         _newTranslationCandidate = hotkey;
       case _ShortcutTarget.translate:
         _translateCandidate = hotkey;
+      case _ShortcutTarget.switchMode:
+        _switchModeCandidate = hotkey;
     }
   }
 
@@ -1270,8 +1704,9 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
       _shortcutSignature(_captureCandidate),
       _shortcutSignature(_newTranslationCandidate),
       _shortcutSignature(_translateCandidate),
+      _shortcutSignature(_switchModeCandidate),
     };
-    if (signatures.length != 3) {
+    if (signatures.length != 4) {
       setState(() => _message = 'Mỗi hành động cần một phím tắt khác nhau.');
       return;
     }
@@ -1283,6 +1718,7 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
       _captureCandidate,
       _newTranslationCandidate,
       _translateCandidate,
+      _switchModeCandidate,
     );
     if (!mounted) return;
     if (error == null) {
@@ -1394,7 +1830,7 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
             const _SetupRow(
               icon: Icons.memory_rounded,
               title: 'Engine',
-              value: 'RapidOCR ONNX + Argos / CTranslate2',
+              value: 'RapidOCR + CTranslate2 + LanguageTool',
             ),
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
@@ -1434,6 +1870,19 @@ class _ShortcutSettingsDialogState extends State<_ShortcutSettingsDialog> {
               previewKey: const Key('translate-shortcut-preview'),
               recorderKey: const Key('translate-hotkey-recorder'),
               buttonKey: const Key('record-translate-shortcut-button'),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(height: 1),
+            ),
+            _buildShortcutEditor(
+              target: _ShortcutTarget.switchMode,
+              title: 'Chuyển Dịch / Ngữ pháp',
+              description:
+                  'Chuyển qua lại giữa hai chức năng ở bất kỳ ô nhập nào.',
+              previewKey: const Key('switch-mode-shortcut-preview'),
+              recorderKey: const Key('switch-mode-hotkey-recorder'),
+              buttonKey: const Key('record-switch-mode-shortcut-button'),
             ),
             if (_message != null) ...[
               const SizedBox(height: 10),

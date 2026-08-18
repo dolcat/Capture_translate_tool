@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 import importlib.util
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,12 @@ OCR_MODEL_DIR = ROOT / "models" / "rapidocr"
 OCR_DET_MODEL_PATH = OCR_MODEL_DIR / "ch_PP-OCRv5_det_mobile.onnx"
 OCR_CLS_MODEL_PATH = OCR_MODEL_DIR / "ch_ppocr_mobile_v2.0_cls_mobile.onnx"
 OCR_REC_MODEL_PATH = OCR_MODEL_DIR / "en_PP-OCRv5_rec_mobile.onnx"
+LANGUAGE_TOOL_DIR = ROOT / "models" / "languagetool"
+LANGUAGE_TOOL_VERSION = "6.8"
+LANGUAGE_TOOL_JAR_PATH = (
+    LANGUAGE_TOOL_DIR / f"LanguageTool-{LANGUAGE_TOOL_VERSION}" / "languagetool-server.jar"
+)
+os.environ["LTP_PATH"] = str(LANGUAGE_TOOL_DIR)
 
 
 class AnalyzeRequest(BaseModel):
@@ -33,12 +41,19 @@ class TranslateRequest(BaseModel):
     target_language: str = Field(alias="targetLanguage")
 
 
+class GrammarRequest(BaseModel):
+    text: str
+    language: str = "en-US"
+
+
 class LocalEngines:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._ocr: Any = None
         self._translator: Any = None
         self._source_sp: Any = None
+        self._grammar: Any = None
+        self._grammar_lock = threading.Lock()
         self._error: str | None = None
 
     @property
@@ -48,6 +63,10 @@ class LocalEngines:
     @property
     def translation_ready(self) -> bool:
         return self._translator is not None and self._source_sp is not None
+
+    @property
+    def grammar_ready(self) -> bool:
+        return self._grammar is not None
 
     @property
     def error(self) -> str | None:
@@ -75,6 +94,19 @@ class LocalEngines:
                 return
             try:
                 self._load_translation()
+                self._error = None
+            except Exception as error:
+                self._error = str(error)
+                raise
+
+    def ensure_grammar_ready(self) -> None:
+        if self.grammar_ready:
+            return
+        with self._grammar_lock:
+            if self.grammar_ready:
+                return
+            try:
+                self._load_grammar()
                 self._error = None
             except Exception as error:
                 self._error = str(error)
@@ -177,6 +209,28 @@ class LocalEngines:
             }
         )
 
+    def _load_grammar(self) -> None:
+        if importlib.util.find_spec("language_tool_python") is None:
+            raise RuntimeError(
+                "Thiếu package Python language_tool_python. "
+                "Hãy chạy backend\\setup_backend.ps1."
+            )
+
+        LANGUAGE_TOOL_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            import language_tool_python
+
+            self._grammar = language_tool_python.LanguageTool(
+                "en-US",
+                language_tool_download_version=LANGUAGE_TOOL_VERSION,
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "Không khởi động được LanguageTool local. "
+                "Cần Java 17 và model LanguageTool đã được cài bằng "
+                f"backend\\setup_backend.ps1. Chi tiết: {error}"
+            ) from error
+
     def analyze(self, image_path: Path) -> dict[str, Any]:
         self.ensure_ready()
         result = self._ocr(str(image_path), use_cls=False)
@@ -218,6 +272,26 @@ class LocalEngines:
         return (
             "".join(translation.hypotheses[0]).replace(chr(0x2581), " ").strip()
         )
+
+    def check_grammar(self, text: str, language: str) -> dict[str, Any]:
+        if language != "en-US":
+            raise ValueError("Kiểm tra ngữ pháp hiện chỉ hỗ trợ English (US).")
+        self.ensure_grammar_ready()
+        from language_tool_python.utils import correct
+
+        with self._grammar_lock:
+            matches = self._grammar.check(text)
+        corrected = correct(text, matches)
+        return {
+            "corrected": corrected,
+            "issueCount": sum(1 for match in matches if match.replacements),
+        }
+
+    def close(self) -> None:
+        grammar = self._grammar
+        self._grammar = None
+        if grammar is not None:
+            grammar.close()
 
 
 def _extract_ocr_entries(result: Any) -> list[tuple[str, float, list[float]]]:
@@ -263,14 +337,34 @@ def _union_boxes(boxes: list[list[float]]) -> list[float]:
 
 
 engines = LocalEngines()
-app = FastAPI(title="LingoSnap local backend", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        engines.close()
+
+
+app = FastAPI(
+    title="LingoSnap local backend",
+    version="0.2.0",
+    lifespan=lifespan,
+)
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     packages_ready = all(
         importlib.util.find_spec(name) is not None
-        for name in ("rapidocr", "onnxruntime", "ctranslate2", "sentencepiece")
+        for name in (
+            "rapidocr",
+            "onnxruntime",
+            "ctranslate2",
+            "sentencepiece",
+            "language_tool_python",
+        )
     )
     models_ready = all(
         path.is_file()
@@ -280,11 +374,13 @@ def health() -> dict[str, Any]:
             OCR_DET_MODEL_PATH,
             OCR_CLS_MODEL_PATH,
             OCR_REC_MODEL_PATH,
+            LANGUAGE_TOOL_JAR_PATH,
         )
     )
     return {
         "ok": True,
         "ready": engines.ready,
+        "grammarReady": engines.grammar_ready,
         "packagesReady": packages_ready,
         "modelsReady": models_ready,
         "error": engines.error,
@@ -318,6 +414,36 @@ def translate(request: TranslateRequest) -> dict[str, str]:
         return {"translated": engines.translate(text)}
     except Exception as error:
         LOGGER.exception("Translate failed")
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/grammar")
+def grammar(request: GrammarRequest) -> dict[str, Any]:
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Hãy nhập hoặc dán văn bản tiếng Anh cần kiểm tra.",
+        )
+    if request.language != "en-US":
+        raise HTTPException(
+            status_code=400,
+            detail="Kiểm tra ngữ pháp hiện chỉ hỗ trợ English (US).",
+        )
+    try:
+        return engines.check_grammar(text, request.language)
+    except Exception as error:
+        LOGGER.exception("Grammar check failed")
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/grammar/warmup")
+def grammar_warmup() -> dict[str, bool]:
+    try:
+        engines.check_grammar("LanguageTool is ready.", "en-US")
+        return {"ready": True}
+    except Exception as error:
+        LOGGER.exception("Grammar warm-up failed")
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 

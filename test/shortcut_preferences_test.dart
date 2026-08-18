@@ -32,16 +32,23 @@ void main() {
       modifiers: const [],
       scope: HotKeyScope.inapp,
     );
+    final switchMode = HotKey(
+      key: PhysicalKeyboardKey.tab,
+      modifiers: [HotKeyModifier.control],
+      scope: HotKeyScope.inapp,
+    );
 
     await preferences.saveCaptureShortcut(shortcut);
     await preferences.saveShortcuts(
       capture: shortcut,
       newTranslation: newTranslation,
       translate: translate,
+      switchMode: switchMode,
     );
     final loaded = await preferences.loadCaptureShortcut();
     final loadedNew = await preferences.loadNewTranslationShortcut();
     final loadedTranslate = await preferences.loadTranslateShortcut();
+    final loadedSwitchMode = await preferences.loadSwitchModeShortcut();
 
     expect(loaded, isNotNull);
     expect(loaded!.physicalKey, PhysicalKeyboardKey.keyG);
@@ -53,5 +60,7 @@ void main() {
     expect(loadedNew?.modifiers, contains(HotKeyModifier.shift));
     expect(loadedTranslate?.physicalKey, PhysicalKeyboardKey.enter);
     expect(loadedTranslate?.modifiers, isEmpty);
+    expect(loadedSwitchMode?.physicalKey, PhysicalKeyboardKey.tab);
+    expect(loadedSwitchMode?.modifiers, contains(HotKeyModifier.control));
   });
 }
