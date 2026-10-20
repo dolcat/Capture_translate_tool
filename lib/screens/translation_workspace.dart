@@ -79,6 +79,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   final FocusNode _grammarFocusNode = FocusNode();
   String _translatedText = '';
   String _correctedText = '';
+  final ScrollController _pageScroll = ScrollController();
+  final GlobalKey _grammarIssuesKey = GlobalKey();
   GrammarResult? _grammarResult;
   GrammarChoices _grammarChoices = const GrammarChoices();
   int _grammarIssueCount = 0;
@@ -463,10 +465,22 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     });
   }
 
+  /// Brings the issue list into view (the page is long once it is shown).
+  void _scrollToGrammarIssues() {
+    final target = _grammarIssuesKey.currentContext;
+    if (target == null) return;
+    Scrollable.ensureVisible(
+      target,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
   Widget? _buildGrammarIssues() {
     final result = _grammarResult;
     if (result == null || !result.hasDetails) return null;
     return GrammarIssuesCard(
+      key: _grammarIssuesKey,
       sourceText: result.sourceText,
       matches: result.matches,
       choices: _grammarChoices,
@@ -628,6 +642,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       unawaited(hotKeyManager.unregister(liveHotkey));
     }
     _live.dispose();
+    _pageScroll.dispose();
     _sourceController.dispose();
     _sourceFocusNode
       ..removeListener(_handleSourceFocusChanged)
@@ -690,104 +705,115 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
                     ? 18.0
                     : 28.0;
 
-                return SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _AppHeader(
-                        mode: _mode,
-                        isBusy: _isCurrentModeBusy,
-                        onModeChanged: _setMode,
-                        onNew: _startNewSession,
-                        onSettings: _showSetupDialog,
-                        onCapture: _captureAndTranslate,
-                      ),
-                      const Divider(height: 1, color: AppColors.border),
-                      Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          horizontalPadding,
-                          verticalPadding,
-                          horizontalPadding,
-                          24,
+                return Scrollbar(
+                  controller: _pageScroll,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _pageScroll,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _AppHeader(
+                          mode: _mode,
+                          isBusy: _isCurrentModeBusy,
+                          onModeChanged: _setMode,
+                          onNew: _startNewSession,
+                          onSettings: _showSetupDialog,
+                          onCapture: _captureAndTranslate,
                         ),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 1360),
-                            child: _mode == WorkspaceMode.live
-                                ? Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      LiveSubtitlePanel(
-                                        controller: _live,
-                                        toggleShortcutLabel: 'Ctrl + Alt + L',
-                                      ),
-                                      const SizedBox(height: 18),
-                                      const _PrivacyFooter(),
-                                    ],
-                                  )
-                                : Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      if (_mode == WorkspaceMode.translation)
-                                        _WorkspaceIntro(
-                                          onCapture: _captureAndTranslate,
-                                          shortcutLabels: _shortcutLabels,
-                                        )
-                                      else
-                                        const _GrammarIntro(),
-                                      SizedBox(
-                                        height: constraints.maxWidth < 480
-                                            ? 16
-                                            : 22,
-                                      ),
-                                      if (_mode == WorkspaceMode.translation)
-                                        _TranslationCard(
-                                          status: _status,
-                                          result: _result,
-                                          lastImagePath: _lastImagePath,
-                                          errorMessage: _errorMessage,
-                                          sourceController: _sourceController,
-                                          sourceFocusNode: _sourceFocusNode,
-                                          translatedText: _translatedText,
-                                          onTranslate: _translateTypedText,
-                                          onRetry: _lastActionWasTextTranslation
-                                              ? _translateTypedText
-                                              : _captureAndTranslate,
-                                          onCopyOriginal: () =>
-                                              _showCopiedMessage(
-                                                'văn bản nhận diện',
-                                              ),
-                                          onCopyTranslation: () =>
-                                              _showCopiedMessage('bản dịch'),
-                                        )
-                                      else
-                                        _GrammarCard(
-                                          status: _grammarStatus,
-                                          errorMessage: _grammarErrorMessage,
-                                          sourceController: _grammarController,
-                                          sourceFocusNode: _grammarFocusNode,
-                                          correctedText: _correctedText,
-                                          issueCount: _grammarIssueCount,
-                                          issues: _buildGrammarIssues(),
-                                          onCheck: _checkGrammar,
-                                          onRetry: _checkGrammar,
-                                          onCopyOriginal: () =>
-                                              _showCopiedMessage(
-                                                'văn bản cần kiểm tra',
-                                              ),
-                                          onCopyCorrection: () =>
-                                              _showCopiedMessage('bản đã sửa'),
+                        const Divider(height: 1, color: AppColors.border),
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            verticalPadding,
+                            horizontalPadding,
+                            24,
+                          ),
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 1360),
+                              child: _mode == WorkspaceMode.live
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        LiveSubtitlePanel(
+                                          controller: _live,
+                                          toggleShortcutLabel: 'Ctrl + Alt + L',
                                         ),
-                                      const SizedBox(height: 18),
-                                      const _PrivacyFooter(),
-                                    ],
-                                  ),
+                                        const SizedBox(height: 18),
+                                        const _PrivacyFooter(),
+                                      ],
+                                    )
+                                  : Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        if (_mode == WorkspaceMode.translation)
+                                          _WorkspaceIntro(
+                                            onCapture: _captureAndTranslate,
+                                            shortcutLabels: _shortcutLabels,
+                                          )
+                                        else
+                                          const _GrammarIntro(),
+                                        SizedBox(
+                                          height: constraints.maxWidth < 480
+                                              ? 16
+                                              : 22,
+                                        ),
+                                        if (_mode == WorkspaceMode.translation)
+                                          _TranslationCard(
+                                            status: _status,
+                                            result: _result,
+                                            lastImagePath: _lastImagePath,
+                                            errorMessage: _errorMessage,
+                                            sourceController: _sourceController,
+                                            sourceFocusNode: _sourceFocusNode,
+                                            translatedText: _translatedText,
+                                            onTranslate: _translateTypedText,
+                                            onRetry:
+                                                _lastActionWasTextTranslation
+                                                ? _translateTypedText
+                                                : _captureAndTranslate,
+                                            onCopyOriginal: () =>
+                                                _showCopiedMessage(
+                                                  'văn bản nhận diện',
+                                                ),
+                                            onCopyTranslation: () =>
+                                                _showCopiedMessage('bản dịch'),
+                                          )
+                                        else
+                                          _GrammarCard(
+                                            status: _grammarStatus,
+                                            errorMessage: _grammarErrorMessage,
+                                            sourceController:
+                                                _grammarController,
+                                            sourceFocusNode: _grammarFocusNode,
+                                            correctedText: _correctedText,
+                                            issueCount: _grammarIssueCount,
+                                            issues: _buildGrammarIssues(),
+                                            onShowIssues:
+                                                _scrollToGrammarIssues,
+                                            onCheck: _checkGrammar,
+                                            onRetry: _checkGrammar,
+                                            onCopyOriginal: () =>
+                                                _showCopiedMessage(
+                                                  'văn bản cần kiểm tra',
+                                                ),
+                                            onCopyCorrection: () =>
+                                                _showCopiedMessage(
+                                                  'bản đã sửa',
+                                                ),
+                                          ),
+                                        const SizedBox(height: 18),
+                                        const _PrivacyFooter(),
+                                      ],
+                                    ),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               },
@@ -1249,6 +1275,7 @@ class _GrammarCard extends StatelessWidget {
     required this.correctedText,
     required this.issueCount,
     required this.issues,
+    required this.onShowIssues,
     required this.onCheck,
     required this.onRetry,
     required this.onCopyOriginal,
@@ -1262,6 +1289,7 @@ class _GrammarCard extends StatelessWidget {
   final String correctedText;
   final int issueCount;
   final Widget? issues;
+  final VoidCallback onShowIssues;
   final VoidCallback onCheck;
   final VoidCallback onRetry;
   final VoidCallback onCopyOriginal;
@@ -1297,6 +1325,16 @@ class _GrammarCard extends StatelessWidget {
               const SizedBox(height: 12),
               _ErrorBanner(message: errorMessage!, onRetry: onRetry),
             ],
+            if (issues != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  key: const Key('grammar-show-issues-button'),
+                  onPressed: onShowIssues,
+                  icon: const Icon(Icons.arrow_downward_rounded, size: 18),
+                  label: const Text('Xem chi tiết từng lỗi'),
+                ),
+              ),
             const SizedBox(height: 14),
             LayoutBuilder(
               builder: (context, constraints) {

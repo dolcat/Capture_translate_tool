@@ -171,6 +171,21 @@ void main() {
       expect(find.text('Đã sửa 3 lỗi'), findsOneWidget);
     });
 
+    testWidgets('the "see details" button scrolls the issue list into view', (
+      tester,
+    ) async {
+      await openGrammar(tester, const Size(1280, 700));
+      final tile = find.byKey(const Key('grammar-issue-0'));
+      expect(tester.getRect(tile).top, greaterThan(700));
+
+      await tester.ensureVisible(
+        find.byKey(const Key('grammar-show-issues-button')),
+      );
+      await tester.tap(find.byKey(const Key('grammar-show-issues-button')));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(tile).top, lessThan(700));
+    });
+
     for (final size in const [
       Size(1280, 900),
       Size(700, 900),
