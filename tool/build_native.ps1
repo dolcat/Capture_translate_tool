@@ -46,7 +46,7 @@ if (-not (Test-Path $cvInstall)) {
 }
 
 # Header-only / small libraries, laid out the way native\CMakeLists.txt expects.
-Get-Source 'https://github.com/google/sentencepiece' 'v0.2.2' 'sp' | Out-Null
+Get-Source 'https://github.com/google/sentencepiece' 'v0.2.0' 'sp' | Out-Null
 Get-Source 'https://github.com/yhirose/cpp-httplib' 'v0.62.0' 'httplib' | Out-Null
 Get-Source 'https://github.com/nlohmann/json' 'v3.12.0' 'nlohmann' | Out-Null
 
