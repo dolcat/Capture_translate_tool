@@ -12,7 +12,8 @@ class TextTranslator {
   explicit TextTranslator(const std::filesystem::path& model_dir);
   ~TextTranslator();
 
-  std::string Translate(const std::string& text) const;
+  // beam_size 1 is fastest; larger values are slower but usually better.
+  std::string Translate(const std::string& text, int beam_size = 2) const;
 
  private:
   struct Impl;

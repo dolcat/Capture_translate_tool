@@ -25,7 +25,7 @@ add_subdirectory(${LS_THIRD_PARTY}/sp ${CMAKE_BINARY_DIR}/sentencepiece EXCLUDE_
 find_library(ORT_LIB onnxruntime PATHS ${ONNXRUNTIME_ROOT}/lib NO_DEFAULT_PATH REQUIRED)
 
 add_executable(lingosnap_backend
-  src/main.cc src/layout.cc src/ocr.cc src/translator.cc src/grammar.cc src/process.cc)
+  src/main.cc src/layout.cc src/live.cc src/ocr.cc src/translator.cc src/grammar.cc src/process.cc)
 target_include_directories(lingosnap_backend PRIVATE
   ${ONNXRUNTIME_ROOT}/include
   ${LS_THIRD_PARTY}/httplib
@@ -36,7 +36,10 @@ target_link_libraries(lingosnap_backend PRIVATE
   ${ORT_LIB} ${OpenCV_LIBS} CTranslate2::ctranslate2 sentencepiece-static)
 if(WIN32)
   target_compile_definitions(lingosnap_backend PRIVATE _WIN32_WINNT=0x0A00 NOMINMAX)
-  target_link_libraries(lingosnap_backend PRIVATE ws2_32)
+  target_link_libraries(lingosnap_backend PRIVATE ws2_32 user32 gdi32)
+  if(MSVC)
+    target_compile_options(lingosnap_backend PRIVATE /utf-8)  # wide string literals in live.cc
+  endif()
 else()
   find_package(Threads REQUIRED)
   target_link_libraries(lingosnap_backend PRIVATE Threads::Threads)

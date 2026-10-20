@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -26,6 +27,9 @@ class OcrEngine {
 
   // Returns lines sorted top-to-bottom / left-to-right with score >= 0.5.
   std::vector<OcrLine> Recognize(const std::filesystem::path& image_path) const;
+
+  // Same, for a packed 8-bit BGR image already in memory (used by live translation).
+  std::vector<OcrLine> Recognize(const uint8_t* bgr, int width, int height, int stride) const;
 
  private:
   struct Impl;

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <numeric>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -218,6 +219,7 @@ struct Detected {
 }  // namespace
 
 struct OcrEngine::Impl {
+  std::mutex run_mutex;  // one-shot captures and live translation share the engine
   Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "lingosnap"};
   Ort::SessionOptions options;
   std::unique_ptr<Ort::Session> det, rec;
@@ -401,6 +403,12 @@ OcrEngine::~OcrEngine() = default;
 
 std::vector<OcrLine> OcrEngine::Recognize(const std::filesystem::path& image_path) const {
   cv::Mat original = LoadImage(image_path);
+  return Recognize(original.data, original.cols, original.rows, static_cast<int>(original.step));
+}
+
+std::vector<OcrLine> OcrEngine::Recognize(const uint8_t* bgr, int width, int height, int stride) const {
+  std::lock_guard<std::mutex> lock(impl_->run_mutex);
+  cv::Mat original(height, width, CV_8UC3, const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
   double ratio_h, ratio_w;
   cv::Mat img = ResizeWithinBounds(original, ratio_h, ratio_w);
 

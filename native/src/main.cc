@@ -14,6 +14,7 @@
 
 #include "grammar.h"
 #include "layout.h"
+#include "live.h"
 #include "ocr.h"
 #include "translator.h"
 
@@ -125,6 +126,10 @@ fs::path ExecutableDir() {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // Screen coordinates must be physical pixels so the selected region matches what we capture.
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
   std::string host = "127.0.0.1";
   int port = 8765;
   fs::path models = ExecutableDir() / "models";
@@ -229,6 +234,65 @@ int main(int argc, char** argv) {
 
   server.Post("/grammar/warmup", [&](const httplib::Request&, httplib::Response& res) {
     grammar("LanguageTool is ready.", res, true);
+  });
+
+  // Live subtitle translation: watch a screen region and overlay the translation.
+  lingosnap::LiveTranslator live(
+      [&](const uint8_t* bgr, int w, int h, int stride) { return engines.Ocr().Recognize(bgr, w, h, stride); },
+      [&](const std::string& text, int beam) { return engines.Mt().Translate(text, beam); });
+
+  auto live_json_body = [&](const httplib::Request& req, httplib::Response& res, json& b) {
+    if (req.body.empty()) { b = json::object(); return true; }
+    return ParseBody(req, res, b);
+  };
+
+  server.Post("/live/select-region", [&](const httplib::Request&, httplib::Response& res) {
+    lingosnap::LiveRegion r;
+    std::string error;
+    if (live.SelectRegion(r, error))
+      return Ok(res, {{"x", r.x}, {"y", r.y}, {"width", r.w}, {"height", r.h}});
+    if (!error.empty()) return Fail(res, 503, error);
+    Ok(res, {{"cancelled", true}});
+  });
+
+  server.Post("/live/start", [&](const httplib::Request& req, httplib::Response& res) {
+    json b;
+    if (!live_json_body(req, res, b)) return;
+    try {
+      engines.Ocr();
+      engines.Mt();
+      std::string error;
+      if (!live.Start(b, error)) return Fail(res, 400, error);
+      Ok(res, live.Status());
+    } catch (const std::exception& e) {
+      Fail(res, 503, e.what());
+    }
+  });
+
+  server.Post("/live/config", [&](const httplib::Request& req, httplib::Response& res) {
+    json b;
+    if (!live_json_body(req, res, b)) return;
+    try {
+      std::string error;
+      if (!live.Configure(b, error)) return Fail(res, 400, error);
+      Ok(res, live.Status());
+    } catch (const std::exception& e) {
+      Fail(res, 400, e.what());
+    }
+  });
+
+  server.Post("/live/stop", [&](const httplib::Request&, httplib::Response& res) {
+    live.Stop();
+    Ok(res, live.Status());
+  });
+
+  server.Get("/live/status", [&](const httplib::Request&, httplib::Response& res) {
+    Ok(res, live.Status());
+  });
+
+  server.Get("/live/history", [&](const httplib::Request& req, httplib::Response& res) {
+    int since = req.has_param("since") ? std::atoi(req.get_param_value("since").c_str()) : 0;
+    Ok(res, live.History(since));
   });
 
   // Load OCR and translation in the background so the first request is fast.

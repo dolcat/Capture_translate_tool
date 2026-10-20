@@ -5,6 +5,8 @@
 #include <ctranslate2/translator.h>
 #include <sentencepiece_processor.h>
 
+#include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -22,6 +24,7 @@ std::string Trim(const std::string& s) {
 }  // namespace
 
 struct TextTranslator::Impl {
+  std::mutex run_mutex;  // one-shot requests and live translation share the model
   sentencepiece::SentencePieceProcessor sp;
   std::unique_ptr<ctranslate2::Translator> translator;
 };
@@ -39,7 +42,8 @@ TextTranslator::TextTranslator(const std::filesystem::path& model_dir)
 
 TextTranslator::~TextTranslator() = default;
 
-std::string TextTranslator::Translate(const std::string& text) const {
+std::string TextTranslator::Translate(const std::string& text, int beam_size) const {
+  std::lock_guard<std::mutex> lock(impl_->run_mutex);
   // Each line is a paragraph or list item: translate them separately (in one batch)
   // and keep line breaks and list markers, so the result has the same layout.
   struct Line { std::string marker; int batch_index = -1; };
@@ -66,7 +70,7 @@ std::string TextTranslator::Translate(const std::string& text) const {
   if (batch.empty()) return "";
 
   ctranslate2::TranslationOptions options;
-  options.beam_size = 2;
+  options.beam_size = static_cast<size_t>(std::clamp(beam_size, 1, 8));
   options.max_decoding_length = 512;
   auto results = impl_->translator->translate_batch(batch, options);
 
