@@ -54,7 +54,10 @@ if (-not $JavaHome) {
     else {
         $javaCommand = Get-Command java.exe -ErrorAction SilentlyContinue
         if ($javaCommand) {
+            # java prints settings to stderr; with 'Stop' PowerShell 5.1 would treat that as an error.
+            $ErrorActionPreference = 'Continue'
             $javaSettings = (& $javaCommand.Source -XshowSettings:properties -version 2>&1 | Out-String)
+            $ErrorActionPreference = 'Stop'
             $javaHomeMatch = [regex]::Match($javaSettings, '(?m)^\s*java\.home\s*=\s*(.+?)\s*$')
             if ($javaHomeMatch.Success) {
                 $JavaHome = $javaHomeMatch.Groups[1].Value
@@ -81,15 +84,26 @@ $visualStudio = & $vswhere -latest -products * -property installationPath
 $redistRoot = Join-Path $visualStudio 'VC\Redist\MSVC'
 $crtDirectory = Get-ChildItem -LiteralPath $redistRoot -Directory |
     Sort-Object Name -Descending |
-    ForEach-Object { Join-Path $_.FullName 'x64\Microsoft.VC143.CRT' } |
-    Where-Object { Test-Path -LiteralPath $_ } |
-    Select-Object -First 1
+    ForEach-Object { Get-ChildItem -Path (Join-Path $_.FullName 'x64') -Directory -Filter 'Microsoft.VC14?.CRT' -ErrorAction SilentlyContinue } |
+    Sort-Object Name -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
 if (-not $crtDirectory) {
-    throw 'Microsoft VC143 x64 redistributable DLLs were not found.'
+    throw 'Microsoft VC14x x64 redistributable DLLs were not found.'
 }
 Write-Host 'Bundling Microsoft Visual C++ runtime DLLs...'
-Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $stageRoot -Force
-Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $backendRoot -Force
+# onnxruntime.dll needs a recent CRT; an older redist (e.g. VS 2019's 14.29) makes the backend
+# exit on start, so use the installed system copy whenever it is newer.
+$system32 = Join-Path $env:SystemRoot 'System32'
+foreach ($dll in Get-ChildItem -Path (Join-Path $crtDirectory '*.dll')) {
+    $source = $dll.FullName
+    $systemDll = Join-Path $system32 $dll.Name
+    if ((Test-Path -LiteralPath $systemDll) -and
+        ([version](Get-Item -LiteralPath $systemDll).VersionInfo.ProductVersion -gt [version]$dll.VersionInfo.ProductVersion)) {
+        $source = $systemDll
+    }
+    Copy-Item -LiteralPath $source -Destination $stageRoot -Force
+    Copy-Item -LiteralPath $source -Destination $backendRoot -Force
+}
 
 # Smoke test: start the backend, check translation, then stop it.
 $backendExe = Join-Path $backendRoot 'lingosnap_backend.exe'
