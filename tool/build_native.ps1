@@ -32,7 +32,7 @@ if (-not (Test-Path $ort)) {
 $ct2Src = Get-Source 'https://github.com/OpenNMT/CTranslate2' 'v4.8.1' 'ct2' -Recursive
 $ct2Install = Join-Path $deps 'ct2-install'
 if (-not (Test-Path $ct2Install)) {
-    Invoke-Checked { cmake -S $ct2Src -B (Join-Path $deps 'ct2-build') -A x64 -DWITH_MKL=OFF -DWITH_RUY=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DBUILD_SHARED_LIBS=ON "-DCMAKE_INSTALL_PREFIX=$ct2Install" }
+    Invoke-Checked { cmake -S $ct2Src -B (Join-Path $deps 'ct2-build') -A x64 "-DWITH_MKL=OFF" "-DWITH_RUY=ON" "-DOPENMP_RUNTIME=COMP" "-DBUILD_CLI=OFF" "-DBUILD_SHARED_LIBS=ON" "-DCMAKE_INSTALL_PREFIX=$ct2Install" }
     Invoke-Checked { cmake --build (Join-Path $deps 'ct2-build') --config Release -j }
     Invoke-Checked { cmake --install (Join-Path $deps 'ct2-build') --config Release }
 }
@@ -40,7 +40,7 @@ if (-not (Test-Path $ct2Install)) {
 $cvSrc = Get-Source 'https://github.com/opencv/opencv' '4.13.0' 'opencv'
 $cvInstall = Join-Path $deps 'opencv-install'
 if (-not (Test-Path $cvInstall)) {
-    Invoke-Checked { cmake -S $cvSrc -B (Join-Path $deps 'opencv-build') -A x64 -DBUILD_SHARED_LIBS=OFF -DBUILD_WITH_STATIC_CRT=OFF -DBUILD_LIST=core,imgproc,imgcodecs -DWITH_FFMPEG=OFF -DWITH_OPENCL=OFF -DWITH_IPP=OFF -DWITH_ITT=OFF -DWITH_TIFF=OFF -DWITH_WEBP=OFF -DWITH_OPENEXR=OFF -DWITH_JASPER=OFF -DWITH_OPENJPEG=OFF -DWITH_PROTOBUF=OFF -DBUILD_PROTOBUF=OFF -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_DOCS=OFF "-DCMAKE_INSTALL_PREFIX=$cvInstall" }
+    Invoke-Checked { cmake -S $cvSrc -B (Join-Path $deps 'opencv-build') -A x64 "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_WITH_STATIC_CRT=OFF" "-DBUILD_LIST=core,imgproc,imgcodecs" "-DWITH_FFMPEG=OFF" "-DWITH_OPENCL=OFF" "-DWITH_IPP=OFF" "-DWITH_ITT=OFF" "-DWITH_TIFF=OFF" "-DWITH_WEBP=OFF" "-DWITH_OPENEXR=OFF" "-DWITH_JASPER=OFF" "-DWITH_OPENJPEG=OFF" "-DWITH_PROTOBUF=OFF" "-DBUILD_PROTOBUF=OFF" "-DBUILD_TESTS=OFF" "-DBUILD_PERF_TESTS=OFF" "-DBUILD_EXAMPLES=OFF" "-DBUILD_opencv_apps=OFF" "-DBUILD_DOCS=OFF" "-DCMAKE_INSTALL_PREFIX=$cvInstall" }
     Invoke-Checked { cmake --build (Join-Path $deps 'opencv-build') --config Release -j }
     Invoke-Checked { cmake --install (Join-Path $deps 'opencv-build') --config Release }
 }
