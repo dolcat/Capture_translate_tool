@@ -39,6 +39,11 @@ struct LiveConfig {
   uint32_t text_rgb = 0xFFFFFF;  // 0xRRGGBB
   uint32_t bg_rgb = 0x0C0C0E;
   bool exclude_from_capture = true;  // keep the overlay out of our own screenshots
+
+  // A separate, movable window that shows only the translation.
+  bool window_enabled = false;
+  bool window_on_top = true;
+  LiveRegion window_rect;  // last position/size; w == 0 means "pick a default"
 };
 
 // Watches a screen region, OCRs it whenever the text changes, translates it, and shows the

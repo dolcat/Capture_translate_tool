@@ -21,6 +21,10 @@ giữ nguyên giao diện HTTP để Flutter không phải đổi hợp đồng:
   `region`, `intervalMs`, `stableMs`, `clearDelayMs`, `beamSize`, `pre`, `post`, `overlay{enabled,position,fontSize,opacity,showOriginal,excludeFromCapture}`.
 - `POST /live/stop`, `GET /live/status`, `GET /live/history?since=<seq>`.
 
+Cửa sổ dịch riêng: khoá `window{enabled,alwaysOnTop,rect}` mở một cửa sổ thường (kéo, đổi kích thước được,
+chữ tự thu nhỏ cho vừa). `GET /live/status` trả `window.rect` (vị trí hiện tại) và `window.closed` (người dùng đã
+bấm X). Cửa sổ ở trạng thái đóng cho tới khi `enabled` được tắt rồi bật lại.
+
 Tuỳ chỉnh bản dịch: `pre` là danh sách `{from,to}` tên riêng/thuật ngữ. Mỗi lần khớp được thay bằng một
 ký hiệu giữ chỗ (`Qx1z`) để máy dịch không làm hỏng tên, dịch xong mới thay lại bằng `to` (để trống = giữ
 nguyên). `post` là danh sách `{from,to}` sửa thẳng bản dịch. `beamSize` 1–6 đổi tốc độ lấy chất lượng.

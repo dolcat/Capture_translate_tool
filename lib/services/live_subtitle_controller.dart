@@ -160,6 +160,7 @@ class LiveSubtitleController extends ChangeNotifier {
       if (_history.length > 50) _history.removeRange(0, _history.length - 50);
       _status = status;
       _error = status.error;
+      await _followWindow(status);
       _notify();
     } on LiveSubtitleException catch (error) {
       _error = error.message;
@@ -167,6 +168,37 @@ class LiveSubtitleController extends ChangeNotifier {
     } finally {
       _polling = false;
     }
+  }
+
+  /// Keeps the settings in step with the separate translation window: remember
+  /// where the user moved it, and switch the setting off when they close it.
+  Future<void> _followWindow(LiveStatus status) async {
+    var next = _settings;
+    if (status.windowClosed && next.windowEnabled) {
+      next = next.copyWith(windowEnabled: false);
+      // The backend forgets "closed" once it is told the window is off.
+      _pushSettings(next);
+    }
+    final rect = status.windowRect;
+    if (rect != null && rect != next.windowRect) {
+      next = next.copyWith(windowRect: rect); // saved only; the backend knows
+    }
+    if (identical(next, _settings)) return;
+    _settings = next;
+    try {
+      await store.save(next);
+    } catch (_) {
+      // Not remembering the position is harmless.
+    }
+  }
+
+  void _pushSettings(LiveSettings settings) {
+    unawaited(
+      service.configure(settings).catchError((Object error) {
+        _error = error is LiveSubtitleException ? error.message : '$error';
+        _notify();
+      }),
+    );
   }
 
   void _notify() {

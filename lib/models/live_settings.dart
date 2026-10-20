@@ -114,6 +114,9 @@ class LiveSettings {
     this.textColor = defaultTextColor,
     this.backgroundColor = defaultBackgroundColor,
     this.minimizeOnStart = true,
+    this.windowEnabled = false,
+    this.windowOnTop = true,
+    this.windowRect,
   });
 
   static const defaultTextColor = '#FFFFFF';
@@ -150,6 +153,15 @@ class LiveSettings {
           normalizeHexColor(json['backgroundColor'] as String? ?? '') ??
           defaultBackgroundColor,
       minimizeOnStart: json['minimizeOnStart'] as bool? ?? true,
+      windowEnabled: json['windowEnabled'] as bool? ?? false,
+      windowOnTop: json['windowOnTop'] as bool? ?? true,
+      windowRect: json['windowRect'] is Map
+          ? LiveRegion.fromJson(
+              (json['windowRect'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value),
+              ),
+            )
+          : null,
     );
   }
 
@@ -170,6 +182,11 @@ class LiveSettings {
   final String backgroundColor;
   final bool minimizeOnStart;
 
+  /// A separate window that shows only the translation, and where the user left it.
+  final bool windowEnabled;
+  final bool windowOnTop;
+  final LiveRegion? windowRect;
+
   LiveSettings copyWith({
     LiveRegion? region,
     int? intervalMs,
@@ -185,6 +202,9 @@ class LiveSettings {
     String? textColor,
     String? backgroundColor,
     bool? minimizeOnStart,
+    bool? windowEnabled,
+    bool? windowOnTop,
+    LiveRegion? windowRect,
   }) {
     return LiveSettings(
       region: region ?? this.region,
@@ -201,6 +221,9 @@ class LiveSettings {
       textColor: textColor ?? this.textColor,
       backgroundColor: backgroundColor ?? this.backgroundColor,
       minimizeOnStart: minimizeOnStart ?? this.minimizeOnStart,
+      windowEnabled: windowEnabled ?? this.windowEnabled,
+      windowOnTop: windowOnTop ?? this.windowOnTop,
+      windowRect: windowRect ?? this.windowRect,
     );
   }
 
@@ -220,6 +243,9 @@ class LiveSettings {
     'textColor': textColor,
     'backgroundColor': backgroundColor,
     'minimizeOnStart': minimizeOnStart,
+    'windowEnabled': windowEnabled,
+    'windowOnTop': windowOnTop,
+    if (windowRect != null) 'windowRect': windowRect!.toJson(),
   };
 
   /// What is sent to the backend to start or reconfigure live translation.
@@ -238,6 +264,11 @@ class LiveSettings {
       'showOriginal': showOriginal,
       'textColor': textColor,
       'backgroundColor': backgroundColor,
+    },
+    'window': {
+      'enabled': windowEnabled,
+      'alwaysOnTop': windowOnTop,
+      if (windowRect != null) 'rect': windowRect!.toJson(),
     },
   };
 }
@@ -269,6 +300,8 @@ class LiveStatus {
     this.ocrMs = 0,
     this.translateMs = 0,
     this.error,
+    this.windowRect,
+    this.windowClosed = false,
   });
 
   factory LiveStatus.fromJson(Map<String, dynamic> json) => LiveStatus(
@@ -279,7 +312,20 @@ class LiveStatus {
     ocrMs: (json['ocrMs'] as num?)?.toInt() ?? 0,
     translateMs: (json['translateMs'] as num?)?.toInt() ?? 0,
     error: json['error'] as String?,
+    windowRect: _windowRectOf(json['window']),
+    windowClosed:
+        json['window'] is Map && (json['window'] as Map)['closed'] == true,
   );
+
+  static LiveRegion? _windowRectOf(Object? window) {
+    if (window is! Map || window['rect'] is! Map) return null;
+    final rect = LiveRegion.fromJson(
+      (window['rect'] as Map).map(
+        (key, value) => MapEntry(key.toString(), value),
+      ),
+    );
+    return rect.width > 0 && rect.height > 0 ? rect : null;
+  }
 
   final bool running;
   final int seq;
@@ -288,4 +334,10 @@ class LiveStatus {
   final int ocrMs;
   final int translateMs;
   final String? error;
+
+  /// Where the separate translation window currently is, if it has been shown.
+  final LiveRegion? windowRect;
+
+  /// True once the user closed that window with its X button.
+  final bool windowClosed;
 }

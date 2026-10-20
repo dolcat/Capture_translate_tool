@@ -83,6 +83,26 @@ void main() {
       expect(broken.textColor, LiveSettings.defaultTextColor);
     });
 
+    test('separate window settings are saved and sent to the backend', () {
+      const rect = LiveRegion(x: 1200, y: 80, width: 620, height: 240);
+      final settings = const LiveSettings().copyWith(
+        windowEnabled: true,
+        windowOnTop: false,
+        windowRect: rect,
+      );
+      final restored = LiveSettings.fromJson(settings.toJson());
+      expect(restored.windowEnabled, isTrue);
+      expect(restored.windowOnTop, isFalse);
+      expect(restored.windowRect, rect);
+      expect(settings.toBackendJson()['window'], {
+        'enabled': true,
+        'alwaysOnTop': false,
+        'rect': rect.toJson(),
+      });
+      // Off by default, so existing users see no new window.
+      expect(const LiveSettings().windowEnabled, isFalse);
+    });
+
     test('clamps out-of-range numbers from a hand-edited file', () {
       final settings = LiveSettings.fromJson({
         'intervalMs': 5,
@@ -147,6 +167,56 @@ void main() {
       expect(withMinimize.isRunning, isFalse);
       expect(service.stopCount, 1);
     });
+
+    test(
+      'remembers where the window was moved and follows it being closed',
+      () async {
+        final service = _FakeLiveService();
+        final store = MemoryLiveSettingsStore();
+        final controller = LiveSubtitleController(
+          service: service,
+          store: store,
+          pollInterval: const Duration(milliseconds: 10),
+        );
+        addTearDown(controller.dispose);
+        await controller.load();
+        await controller.updateSettings(
+          controller.settings.copyWith(
+            region: service.region,
+            windowEnabled: true,
+          ),
+        );
+        await controller.start();
+        service.configured.clear();
+
+        // The user drags the window somewhere.
+        const moved = LiveRegion(x: 50, y: 60, width: 500, height: 200);
+        service.statusToReturn = const LiveStatus(
+          running: true,
+          windowRect: moved,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(controller.settings.windowRect, moved);
+        expect((await store.load()).windowRect, moved);
+        expect(
+          service.configured,
+          isEmpty,
+          reason: 'the backend already knows',
+        );
+
+        // Then closes it with the X button: the setting switches itself off.
+        service.statusToReturn = const LiveStatus(
+          running: true,
+          windowRect: moved,
+          windowClosed: true,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(controller.settings.windowEnabled, isFalse);
+        expect(service.configured, isNotEmpty);
+        expect(service.configured.last.windowEnabled, isFalse);
+        expect((await store.load()).windowEnabled, isFalse);
+      },
+    );
 
     test('pushes changed settings to a running session once', () async {
       final service = _FakeLiveService();
@@ -234,6 +304,24 @@ void main() {
             .text,
         'Zorvex',
       );
+    });
+
+    testWidgets('the separate window can be switched on and kept on top', (
+      tester,
+    ) async {
+      await openLiveMode(tester, const Size(1280, 1400));
+      final onTop = find.byKey(const Key('live-window-on-top-checkbox'));
+      await tester.ensureVisible(onTop);
+      expect(tester.widget<CheckboxListTile>(onTop).onChanged, isNull);
+
+      await tester.tap(find.byKey(const Key('live-window-switch')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(onTop).onChanged, isNotNull);
+      expect(tester.widget<CheckboxListTile>(onTop).value, isTrue);
+
+      await tester.tap(onTop);
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(onTop).value, isFalse);
     });
 
     testWidgets('picking colours updates the preview and the settings', (

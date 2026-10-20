@@ -11,6 +11,7 @@
 #include <future>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <opencv2/imgproc.hpp>
 #include <thread>
 #include <unordered_map>
@@ -220,6 +221,15 @@ LiveConfig ParseConfig(const json& j, LiveConfig c) {
     c.bg_rgb = ParseColor(o.value("backgroundColor", ""), c.bg_rgb);
     c.exclude_from_capture = o.value("excludeFromCapture", c.exclude_from_capture);
   }
+  if (j.contains("window") && j["window"].is_object()) {
+    const auto& w = j["window"];
+    c.window_enabled = w.value("enabled", c.window_enabled);
+    c.window_on_top = w.value("alwaysOnTop", c.window_on_top);
+    if (w.contains("rect") && w["rect"].is_object()) {
+      const auto& r = w["rect"];
+      c.window_rect = {r.value("x", 0), r.value("y", 0), r.value("width", 0), r.value("height", 0)};
+    }
+  }
   return c;
 }
 
@@ -236,7 +246,10 @@ json ConfigJson(const LiveConfig& c) {
                        {"fontSize", c.font_size}, {"opacity", c.opacity},
                        {"showOriginal", c.show_original}, {"textColor", ColorString(c.text_rgb)},
                        {"backgroundColor", ColorString(c.bg_rgb)},
-                       {"excludeFromCapture", c.exclude_from_capture}}}};
+                       {"excludeFromCapture", c.exclude_from_capture}}},
+          {"window", {{"enabled", c.window_enabled}, {"alwaysOnTop", c.window_on_top},
+                      {"rect", {{"x", c.window_rect.x}, {"y", c.window_rect.y},
+                                {"width", c.window_rect.w}, {"height", c.window_rect.h}}}}}};
 }
 
 // ------------------------------------------------------------ platform layer
@@ -303,6 +316,26 @@ class Ui {
     PostThreadMessageW(thread_id_, kHide, 0, 0);
   }
 
+  void ShowPanel(const OverlayState& s) {
+    Ensure();
+    { std::lock_guard<std::mutex> l(mutex_); pending_panel_ = s; has_panel_ = true; }
+    PostThreadMessageW(thread_id_, kPanel, 0, 0);
+  }
+
+  // `forget_closed` also clears "the user closed the window", so it may open again later.
+  void HidePanel(bool forget_closed) {
+    if (!thread_id_) return;
+    { std::lock_guard<std::mutex> l(mutex_); has_panel_ = false; }
+    PostThreadMessageW(thread_id_, kPanelHide, forget_closed ? 1 : 0, 0);
+  }
+
+  // Last known outer rectangle of the separate window and whether the user closed it.
+  void PanelState(LiveRegion& rect, bool& closed) {
+    std::lock_guard<std::mutex> l(mutex_);
+    rect = panel_rect_;
+    closed = panel_closed_;
+  }
+
   // Returns false on cancel/timeout.
   bool Select(LiveRegion& out) {
     Ensure();
@@ -318,7 +351,8 @@ class Ui {
   }
 
  private:
-  static constexpr UINT kShow = WM_APP + 1, kHide = WM_APP + 2, kSelect = WM_APP + 3;
+  static constexpr UINT kShow = WM_APP + 1, kHide = WM_APP + 2, kSelect = WM_APP + 3, kPanel = WM_APP + 4,
+                        kPanelHide = WM_APP + 5;
 
   struct Pending {
     std::mutex m;
@@ -353,6 +387,12 @@ class Ui {
     sc.hInstance = inst;
     sc.lpszClassName = L"LingoSnapSelector";
     RegisterClassW(&sc);
+    WNDCLASSW pc{};
+    pc.lpfnWndProc = &Ui::PanelProc;
+    pc.hInstance = inst;
+    pc.lpszClassName = L"LingoSnapPanel";
+    pc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    RegisterClassW(&pc);
     ready.set_value();
 
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -360,10 +400,169 @@ class Ui {
         if (msg.message == kShow) { ApplyOverlay(); continue; }
         if (msg.message == kHide) { if (overlay_) ShowWindow(overlay_, SW_HIDE); continue; }
         if (msg.message == kSelect) { BeginSelect(); continue; }
+        if (msg.message == kPanel) { ApplyPanel(); continue; }
+        if (msg.message == kPanelHide) {
+          if (panel_) ShowWindow(panel_, SW_HIDE);
+          if (msg.wParam) { std::lock_guard<std::mutex> l(mutex_); panel_closed_ = false; }
+          continue;
+        }
       }
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
+  }
+
+  // ----- separate translation window
+
+  static std::wstring_view PanelHint() { return L"Đang chờ phụ đề…"; }
+
+  void ApplyPanel() {
+    OverlayState s;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (!has_panel_ || panel_closed_) return;
+      s = pending_panel_;
+    }
+    const LiveConfig& c = s.config;
+    if (!panel_) {
+      const LiveRegion& r = c.region;
+      POINT center{r.x + r.w / 2, r.y + r.h / 2};
+      MONITORINFO mi{sizeof(mi)};
+      GetMonitorInfoW(MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST), &mi);
+      int w = 620, h = 240, x = mi.rcMonitor.right - w - 24, y = mi.rcMonitor.top + 80;
+      const LiveRegion& saved = c.window_rect;
+      RECT saved_rc{saved.x, saved.y, saved.x + saved.w, saved.y + saved.h};
+      if (saved.w >= 240 && saved.h >= 120 && MonitorFromRect(&saved_rc, MONITOR_DEFAULTTONULL)) {
+        x = saved.x; y = saved.y; w = saved.w; h = saved.h;  // remembered from last time
+      }
+      panel_ = CreateWindowExW(WS_EX_TOOLWINDOW, L"LingoSnapPanel", L"LingoSnap · Bản dịch",
+                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME, x, y, w, h, nullptr,
+                               nullptr, GetModuleHandleW(nullptr), nullptr);
+      if (!panel_) return;
+      RecordPanelRect();
+    }
+    panel_cfg_ = c;
+    panel_translated_ = Widen(s.translated);
+    panel_original_ = c.show_original ? Widen(s.original) : L"";
+    // Our own window must not be read back as a subtitle when it overlaps the watched region.
+    SetWindowDisplayAffinity(panel_, c.exclude_from_capture ? 0x11 : 0);
+    SetWindowPos(panel_, c.window_on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowDisplayAffinity(panel_, c.exclude_from_capture ? 0x11 : 0);
+    InvalidateRect(panel_, nullptr, FALSE);
+  }
+
+  void RecordPanelRect() {
+    RECT rc;
+    if (!panel_ || !GetWindowRect(panel_, &rc)) return;
+    std::lock_guard<std::mutex> l(mutex_);
+    panel_rect_ = {rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top};
+  }
+
+  void PaintPanel(HWND hwnd, HDC target) {
+    RECT client;
+    GetClientRect(hwnd, &client);
+    HDC mem = CreateCompatibleDC(target);
+    HBITMAP bmp = CreateCompatibleBitmap(target, client.right, client.bottom);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    auto rgb = [](uint32_t c) { return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF); };
+    const uint32_t text_rgb = panel_cfg_.text_rgb, bg_rgb = panel_cfg_.bg_rgb;
+    HBRUSH bg = CreateSolidBrush(rgb(bg_rgb));
+    FillRect(mem, &client, bg);
+    DeleteObject(bg);
+    SetBkMode(mem, TRANSPARENT);
+
+    auto fade = [&](int percent_text, int shift) {
+      int t = (text_rgb >> shift) & 0xFF, b = (bg_rgb >> shift) & 0xFF;
+      return (t * percent_text + b * (100 - percent_text)) / 100;
+    };
+    const bool waiting = panel_translated_.empty();
+    const std::wstring main_text = waiting ? std::wstring(PanelHint()) : panel_translated_;
+    const int pad = 18, gap = 8;
+    const int avail_w = std::max<int>(40, client.right - 2 * pad);
+    const int avail_h = std::max<int>(20, client.bottom - 2 * pad);
+
+    auto make_font = [](int px, int weight) {
+      return CreateFontW(-px, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                         CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    };
+    auto measure = [&](HFONT font, const std::wstring& text) {
+      if (text.empty()) return 0;
+      HGDIOBJ prev = SelectObject(mem, font);
+      RECT rc{0, 0, avail_w, 0};
+      DrawTextW(mem, text.c_str(), -1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
+      SelectObject(mem, prev);
+      return static_cast<int>(rc.bottom - rc.top);
+    };
+
+    // Shrink the text until it fits, so a long sentence is never cut off.
+    int size = panel_cfg_.font_size;
+    HFONT main_font = nullptr, small_font = nullptr;
+    int main_h = 0, small_h = 0;
+    for (;; size -= 2) {
+      if (main_font) DeleteObject(main_font);
+      if (small_font) DeleteObject(small_font);
+      main_font = make_font(size, FW_SEMIBOLD);
+      small_font = make_font(std::max(11, size * 6 / 10), FW_NORMAL);
+      main_h = measure(main_font, main_text);
+      small_h = waiting ? 0 : measure(small_font, panel_original_);
+      int total = main_h + (small_h > 0 ? gap + small_h : 0);
+      if (total <= avail_h || size <= 12) break;
+    }
+    int content = main_h + (small_h > 0 ? gap + small_h : 0);
+    int top = std::max<int>(pad, (client.bottom - content) / 2);
+
+    RECT main_rc{pad, top, client.right - pad, top + main_h};
+    HGDIOBJ prev = SelectObject(mem, main_font);
+    SetTextColor(mem, waiting ? RGB(fade(60, 16), fade(60, 8), fade(60, 0)) : rgb(text_rgb));
+    DrawTextW(mem, main_text.c_str(), -1, &main_rc, DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
+    if (small_h > 0) {
+      RECT small_rc{pad, top + main_h + gap, client.right - pad, top + main_h + gap + small_h};
+      SelectObject(mem, small_font);
+      SetTextColor(mem, RGB(fade(60, 16), fade(60, 8), fade(60, 0)));
+      DrawTextW(mem, panel_original_.c_str(), -1, &small_rc, DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
+    }
+    SelectObject(mem, prev);
+    DeleteObject(main_font);
+    DeleteObject(small_font);
+
+    BitBlt(target, 0, 0, client.right, client.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+  }
+
+  static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    Ui& ui = Get();
+    switch (msg) {
+      case WM_ERASEBKGND: return 1;
+      case WM_GETMINMAXINFO: {
+        auto* info = reinterpret_cast<MINMAXINFO*>(lp);
+        info->ptMinTrackSize = POINT{260, 140};
+        return 0;
+      }
+      case WM_SIZE:
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+      case WM_EXITSIZEMOVE:
+        ui.RecordPanelRect();
+        return 0;
+      case WM_CLOSE: {  // hide instead of destroy; the app learns about it from the status
+        ui.RecordPanelRect();
+        ShowWindow(hwnd, SW_HIDE);
+        std::lock_guard<std::mutex> l(ui.mutex_);
+        ui.panel_closed_ = true;
+        return 0;
+      }
+      case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        ui.PaintPanel(hwnd, dc);
+        EndPaint(hwnd, &ps);
+        return 0;
+      }
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
   }
 
   // ----- overlay
@@ -610,12 +809,15 @@ class Ui {
   std::thread thread_;
   DWORD thread_id_ = 0;
   std::mutex mutex_;
-  OverlayState pending_overlay_;
-  bool has_overlay_ = false;
+  OverlayState pending_overlay_, pending_panel_;
+  bool has_overlay_ = false, has_panel_ = false, panel_closed_ = false;
+  LiveRegion panel_rect_;
   std::shared_ptr<Pending> select_;
 
   // UI-thread only
-  HWND overlay_ = nullptr, selector_ = nullptr;
+  HWND overlay_ = nullptr, selector_ = nullptr, panel_ = nullptr;
+  LiveConfig panel_cfg_;
+  std::wstring panel_translated_, panel_original_;
   HFONT main_font_ = nullptr, small_font_ = nullptr;
   std::wstring translated_, original_;
   uint32_t text_rgb_ = 0xFFFFFF, bg_rgb_ = 0x0C0C0E;
@@ -633,6 +835,9 @@ class Ui {
   static Ui& Get() { static Ui ui; return ui; }
   void ShowOverlay(const OverlayState&) {}
   void HideOverlay() {}
+  void ShowPanel(const OverlayState&) {}
+  void HidePanel(bool) {}
+  void PanelState(LiveRegion& rect, bool& closed) { rect = LiveRegion{}; closed = false; }
   bool Select(LiveRegion&) { return false; }
 };
 
@@ -675,6 +880,13 @@ struct LiveTranslator::Impl {
     wake.notify_all();
     if (worker.joinable()) worker.join();
     Ui::Get().HideOverlay();
+    Ui::Get().HidePanel(true);
+  }
+
+  // Shows or hides the separate window to match the settings (the overlay is handled by Publish).
+  static void SyncPanel(const LiveConfig& cfg, const std::string& original, const std::string& translated) {
+    if (cfg.window_enabled) Ui::Get().ShowPanel({translated, original, cfg});
+    else Ui::Get().HidePanel(true);
   }
 
   bool Sleep(int ms) {  // false when stopped
@@ -723,6 +935,7 @@ struct LiveTranslator::Impl {
     }
     if (cfg.overlay_enabled) Ui::Get().ShowOverlay({translated, original, cfg});
     else Ui::Get().HideOverlay();
+    SyncPanel(cfg, original, translated);
   }
 
   void Loop() {
@@ -757,6 +970,8 @@ struct LiveTranslator::Impl {
             shown_translated = Translate(shown_original, cfg, cache);
             Publish(shown_original, shown_translated, cfg, false);
             overlay_changed = Clock::now();
+          } else {
+            SyncPanel(cfg, shown_original, shown_translated);  // e.g. window just switched on/off
           }
         }
 
@@ -886,7 +1101,12 @@ bool LiveTranslator::SelectRegion(LiveRegion& out, std::string& error) {
 json LiveTranslator::Status() const {
   std::lock_guard<std::mutex> l(impl_->mutex);
   const auto& r = impl_->config.region;
-  return {{"running", impl_->running},
+  LiveRegion panel;
+  bool panel_closed = false;
+  Ui::Get().PanelState(panel, panel_closed);
+  return {{"window", {{"closed", panel_closed},
+                      {"rect", {{"x", panel.x}, {"y", panel.y}, {"width", panel.w}, {"height", panel.h}}}}},
+          {"running", impl_->running},
           {"region", {{"x", r.x}, {"y", r.y}, {"width", r.w}, {"height", r.h}}},
           {"seq", impl_->seq},
           {"original", impl_->last_original},

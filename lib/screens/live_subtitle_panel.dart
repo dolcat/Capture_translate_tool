@@ -79,6 +79,8 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
                 const SizedBox(height: 16),
                 _displayCard(context),
                 const SizedBox(height: 16),
+                _windowCard(context),
+                const SizedBox(height: 16),
                 _timingCard(context),
               ],
             );
@@ -446,6 +448,39 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
             value: s.minimizeOnStart,
             onChanged: (v) =>
                 _update((s) => s.copyWith(minimizeOnStart: v ?? true)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _windowCard(BuildContext context) {
+    final s = _c.settings;
+    return _Card(
+      title: 'Cửa sổ dịch riêng',
+      subtitle:
+          'Mở một cửa sổ chỉ để hiện bản dịch, dùng chung màu và cỡ chữ ở trên. '
+          'Kéo thanh tiêu đề để di chuyển, kéo cạnh để đổi kích thước; app nhớ '
+          'vị trí cho lần sau. Chữ tự thu nhỏ nếu câu quá dài.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SwitchListTile(
+            key: const Key('live-window-switch'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Hiện bản dịch trong cửa sổ riêng'),
+            value: s.windowEnabled,
+            onChanged: (v) => _update((s) => s.copyWith(windowEnabled: v)),
+          ),
+          CheckboxListTile(
+            key: const Key('live-window-on-top-checkbox'),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Luôn nằm trên các cửa sổ khác'),
+            value: s.windowOnTop,
+            onChanged: s.windowEnabled
+                ? (v) => _update((s) => s.copyWith(windowOnTop: v ?? true))
+                : null,
           ),
         ],
       ),
