@@ -4,21 +4,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../core/app_theme.dart';
 import '../models/analysis_result.dart';
 import '../services/app_window_service.dart';
 import '../services/capture_service.dart';
 import '../services/grammar_service.dart';
+import '../services/live_settings_store.dart';
+import '../services/live_subtitle_controller.dart';
+import '../services/live_subtitle_service.dart';
 import '../services/shortcut_preferences.dart';
 import '../services/translation_service.dart';
 import '../widgets/translation_panel.dart';
+import 'live_subtitle_panel.dart';
 
 enum WorkspaceStatus { idle, capturing, analyzing, translating, success, error }
 
 enum GrammarStatus { idle, warmingUp, checking, success, error }
 
-enum WorkspaceMode { translation, grammar }
+enum WorkspaceMode { translation, grammar, live }
 
 class _NewTranslationIntent extends Intent {
   const _NewTranslationIntent();
@@ -38,6 +43,8 @@ class TranslationWorkspace extends StatefulWidget {
     required this.captureService,
     required this.translationService,
     required this.grammarService,
+    required this.liveSubtitleService,
+    required this.liveSettingsStore,
     required this.shortcutPreferences,
     required this.registerSystemHotkey,
     super.key,
@@ -47,6 +54,8 @@ class TranslationWorkspace extends StatefulWidget {
   final ScreenCaptureService captureService;
   final TranslationService translationService;
   final GrammarService grammarService;
+  final LiveSubtitleService liveSubtitleService;
+  final LiveSettingsStore liveSettingsStore;
   final ShortcutPreferences shortcutPreferences;
   final bool registerSystemHotkey;
 
@@ -79,6 +88,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   HotKey _translateHotkey = _defaultTranslateHotkey();
   HotKey _switchModeHotkey = _defaultSwitchModeHotkey();
   HotKey? _captureHotkey;
+  late final LiveSubtitleController _live;
+  HotKey? _liveHotkey;
   bool _lastActionWasTextTranslation = false;
   bool _isSettingsOpen = false;
 
@@ -89,12 +100,23 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
 
   bool get _isGrammarBusy => _grammarStatus == GrammarStatus.checking;
 
-  bool get _isCurrentModeBusy =>
-      _mode == WorkspaceMode.translation ? _isBusy : _isGrammarBusy;
+  bool get _isCurrentModeBusy => switch (_mode) {
+    WorkspaceMode.translation => _isBusy,
+    WorkspaceMode.grammar => _isGrammarBusy,
+    WorkspaceMode.live => false,
+  };
 
   @override
   void initState() {
     super.initState();
+    _live = LiveSubtitleController(
+      service: widget.liveSubtitleService,
+      store: widget.liveSettingsStore,
+      minimizeWindow: widget.registerSystemHotkey
+          ? windowManager.minimize
+          : null,
+    );
+    unawaited(_live.load());
     _sourceFocusNode.addListener(_handleSourceFocusChanged);
     HardwareKeyboard.instance.addHandler(_handleSwitchModeKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initializeShortcuts());
@@ -175,6 +197,26 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     });
     if (widget.registerSystemHotkey) {
       await _activateHotkey(hotkey);
+      await _registerLiveHotkey();
+    }
+  }
+
+  /// Ctrl+Alt+L starts/stops live subtitles from anywhere, even while the
+  /// window is minimised behind a game or a video.
+  Future<void> _registerLiveHotkey() async {
+    final hotkey = HotKey(
+      key: PhysicalKeyboardKey.keyL,
+      modifiers: [HotKeyModifier.control, HotKeyModifier.alt],
+      scope: HotKeyScope.system,
+    );
+    try {
+      await hotKeyManager.register(
+        hotkey,
+        keyDownHandler: (_) => unawaited(_live.toggle()),
+      );
+      _liveHotkey = hotkey;
+    } catch (_) {
+      // Another app owns the shortcut; the buttons in the window still work.
     }
   }
 
@@ -448,7 +490,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   }
 
   void _startNewSession() {
-    if (_isCurrentModeBusy) return;
+    if (_isCurrentModeBusy || _mode == WorkspaceMode.live) return;
     if (_mode == WorkspaceMode.grammar) {
       setState(() {
         _grammarStatus = GrammarStatus.idle;
@@ -480,10 +522,13 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (mode == WorkspaceMode.grammar) {
-        _grammarFocusNode.requestFocus();
-      } else {
-        _sourceFocusNode.requestFocus();
+      switch (mode) {
+        case WorkspaceMode.grammar:
+          _grammarFocusNode.requestFocus();
+        case WorkspaceMode.translation:
+          _sourceFocusNode.requestFocus();
+        case WorkspaceMode.live:
+          break;
       }
     });
   }
@@ -530,6 +575,11 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     if (hotkey != null) {
       unawaited(hotKeyManager.unregister(hotkey));
     }
+    final liveHotkey = _liveHotkey;
+    if (liveHotkey != null) {
+      unawaited(hotKeyManager.unregister(liveHotkey));
+    }
+    _live.dispose();
     _sourceController.dispose();
     _sourceFocusNode
       ..removeListener(_handleSourceFocusChanged)
@@ -615,57 +665,76 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
                         child: Center(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 1360),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (_mode == WorkspaceMode.translation)
-                                  _WorkspaceIntro(
-                                    onCapture: _captureAndTranslate,
-                                    shortcutLabels: _shortcutLabels,
+                            child: _mode == WorkspaceMode.live
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      LiveSubtitlePanel(
+                                        controller: _live,
+                                        toggleShortcutLabel: 'Ctrl + Alt + L',
+                                      ),
+                                      const SizedBox(height: 18),
+                                      const _PrivacyFooter(),
+                                    ],
                                   )
-                                else
-                                  const _GrammarIntro(),
-                                SizedBox(
-                                  height: constraints.maxWidth < 480 ? 16 : 22,
-                                ),
-                                if (_mode == WorkspaceMode.translation)
-                                  _TranslationCard(
-                                    status: _status,
-                                    result: _result,
-                                    lastImagePath: _lastImagePath,
-                                    errorMessage: _errorMessage,
-                                    sourceController: _sourceController,
-                                    sourceFocusNode: _sourceFocusNode,
-                                    translatedText: _translatedText,
-                                    onTranslate: _translateTypedText,
-                                    onRetry: _lastActionWasTextTranslation
-                                        ? _translateTypedText
-                                        : _captureAndTranslate,
-                                    onCopyOriginal: () =>
-                                        _showCopiedMessage('văn bản nhận diện'),
-                                    onCopyTranslation: () =>
-                                        _showCopiedMessage('bản dịch'),
-                                  )
-                                else
-                                  _GrammarCard(
-                                    status: _grammarStatus,
-                                    errorMessage: _grammarErrorMessage,
-                                    sourceController: _grammarController,
-                                    sourceFocusNode: _grammarFocusNode,
-                                    correctedText: _correctedText,
-                                    issueCount: _grammarIssueCount,
-                                    onCheck: _checkGrammar,
-                                    onRetry: _checkGrammar,
-                                    onCopyOriginal: () => _showCopiedMessage(
-                                      'văn bản cần kiểm tra',
-                                    ),
-                                    onCopyCorrection: () =>
-                                        _showCopiedMessage('bản đã sửa'),
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (_mode == WorkspaceMode.translation)
+                                        _WorkspaceIntro(
+                                          onCapture: _captureAndTranslate,
+                                          shortcutLabels: _shortcutLabels,
+                                        )
+                                      else
+                                        const _GrammarIntro(),
+                                      SizedBox(
+                                        height: constraints.maxWidth < 480
+                                            ? 16
+                                            : 22,
+                                      ),
+                                      if (_mode == WorkspaceMode.translation)
+                                        _TranslationCard(
+                                          status: _status,
+                                          result: _result,
+                                          lastImagePath: _lastImagePath,
+                                          errorMessage: _errorMessage,
+                                          sourceController: _sourceController,
+                                          sourceFocusNode: _sourceFocusNode,
+                                          translatedText: _translatedText,
+                                          onTranslate: _translateTypedText,
+                                          onRetry: _lastActionWasTextTranslation
+                                              ? _translateTypedText
+                                              : _captureAndTranslate,
+                                          onCopyOriginal: () =>
+                                              _showCopiedMessage(
+                                                'văn bản nhận diện',
+                                              ),
+                                          onCopyTranslation: () =>
+                                              _showCopiedMessage('bản dịch'),
+                                        )
+                                      else
+                                        _GrammarCard(
+                                          status: _grammarStatus,
+                                          errorMessage: _grammarErrorMessage,
+                                          sourceController: _grammarController,
+                                          sourceFocusNode: _grammarFocusNode,
+                                          correctedText: _correctedText,
+                                          issueCount: _grammarIssueCount,
+                                          onCheck: _checkGrammar,
+                                          onRetry: _checkGrammar,
+                                          onCopyOriginal: () =>
+                                              _showCopiedMessage(
+                                                'văn bản cần kiểm tra',
+                                              ),
+                                          onCopyCorrection: () =>
+                                              _showCopiedMessage('bản đã sửa'),
+                                        ),
+                                      const SizedBox(height: 18),
+                                      const _PrivacyFooter(),
+                                    ],
                                   ),
-                                const SizedBox(height: 18),
-                                const _PrivacyFooter(),
-                              ],
-                            ),
                           ),
                         ),
                       ),
@@ -782,6 +851,11 @@ class _AppHeader extends StatelessWidget {
               icon: Icon(Icons.spellcheck_rounded, size: 17),
               label: Text('Ngữ pháp', key: Key('grammar-mode-button')),
             ),
+            ButtonSegment(
+              value: WorkspaceMode.live,
+              icon: Icon(Icons.subtitles_outlined, size: 17),
+              label: Text('Phụ đề', key: Key('live-mode-button')),
+            ),
           ],
           selected: {mode},
           onSelectionChanged: isBusy
@@ -809,8 +883,10 @@ class _AppHeader extends StatelessWidget {
                 modeSelector,
                 const Spacer(),
                 settingsButton,
-                const SizedBox(width: 5),
-                buildNewButton(),
+                if (mode != WorkspaceMode.live) ...[
+                  const SizedBox(width: 5),
+                  buildNewButton(),
+                ],
                 if (mode == WorkspaceMode.translation) ...[
                   const SizedBox(width: 9),
                   buildCaptureButton(),
@@ -820,7 +896,9 @@ class _AppHeader extends StatelessWidget {
           );
         }
 
-        final actionButtons = mode == WorkspaceMode.grammar
+        final actionButtons = mode == WorkspaceMode.live
+            ? const SizedBox.shrink()
+            : mode == WorkspaceMode.grammar
             ? Align(alignment: Alignment.centerRight, child: buildNewButton())
             : useVerticalActions
             ? Column(
