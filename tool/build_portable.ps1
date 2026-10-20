@@ -1,5 +1,4 @@
 param(
-    [string]$PythonVersion = '3.11.9',
     [string]$JavaHome = '',
     [switch]$SkipFlutterBuild
 )
@@ -11,7 +10,6 @@ $portableRoot = Join-Path $projectRoot 'build\portable'
 $stageRoot = Join-Path $portableRoot 'LingoSnap'
 $cacheRoot = Join-Path $portableRoot 'cache'
 $zipPath = Join-Path $portableRoot 'LingoSnap-windows-x64.zip'
-$requirements = Join-Path $projectRoot 'backend\requirements-portable.txt'
 
 function Assert-ChildPath {
     param([string]$Path, [string]$Parent)
@@ -46,22 +44,8 @@ if (Test-Path -LiteralPath $stageRoot) {
 New-Item -ItemType Directory -Path $stageRoot | Out-Null
 Copy-Item -Path (Join-Path $releaseRoot '*') -Destination $stageRoot -Recurse -Force
 
-$pythonArchive = Join-Path $cacheRoot "python-$PythonVersion-embed-amd64.zip"
-$pythonUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
-if (-not (Test-Path -LiteralPath $pythonArchive)) {
-    Write-Host "Downloading Python Embedded $PythonVersion..."
-    Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonArchive
-}
-
 $backendRoot = Join-Path $stageRoot 'data\backend'
-$pythonRoot = Join-Path $backendRoot 'python'
 $javaRoot = Join-Path $backendRoot 'java'
-Assert-ChildPath -Path $pythonRoot -Parent $stageRoot
-if (Test-Path -LiteralPath $pythonRoot) {
-    Remove-Item -LiteralPath $pythonRoot -Recurse -Force
-}
-New-Item -ItemType Directory -Path $pythonRoot | Out-Null
-Expand-Archive -LiteralPath $pythonArchive -DestinationPath $pythonRoot -Force
 
 if (-not $JavaHome) {
     if ($env:JAVA_HOME) {
@@ -89,46 +73,6 @@ if (Test-Path -LiteralPath $javaRoot) {
 Write-Host 'Bundling Java runtime for LanguageTool...'
 Copy-Item -LiteralPath $JavaHome -Destination $javaRoot -Recurse -Force
 
-$pythonMinor = ($PythonVersion.Split('.')[0..1] -join '')
-$pthFile = Join-Path $pythonRoot "python$pythonMinor._pth"
-@(
-    "python$pythonMinor.zip"
-    '.'
-    'Lib\site-packages'
-    'import site'
-) | Set-Content -LiteralPath $pthFile -Encoding ASCII
-
-$sitePackages = Join-Path $pythonRoot 'Lib\site-packages'
-New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
-Write-Host 'Installing backend packages into the embedded runtime...'
-python -m pip install `
-    --disable-pip-version-check `
-    --upgrade `
-    --ignore-installed `
-    --no-compile `
-    --target $sitePackages `
-    -r $requirements
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-# The RapidOCR wheel includes larger default PP-OCRv6 models. LingoSnap uses
-# its own PP-OCRv5 mobile files under data\backend\models, so remove duplicates.
-$rapidOcrBundledModels = Join-Path $sitePackages 'rapidocr\models'
-if (Test-Path -LiteralPath $rapidOcrBundledModels) {
-    foreach ($model in Get-ChildItem -LiteralPath $rapidOcrBundledModels -Filter '*.onnx' -File) {
-        Remove-Item -LiteralPath $model.FullName -Force
-    }
-}
-
-foreach ($obsoletePath in @(
-    (Join-Path $sitePackages 'paddle'),
-    (Join-Path $sitePackages 'paddleocr'),
-    (Join-Path $stageRoot 'data\backend\models\paddleocr')
-)) {
-    if (Test-Path -LiteralPath $obsoletePath) {
-        throw "Obsolete Paddle content found in portable package: $obsoletePath"
-    }
-}
-
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere)) {
     throw 'vswhere.exe was not found. Visual Studio Desktop development with C++ is required.'
@@ -145,19 +89,25 @@ if (-not $crtDirectory) {
 }
 Write-Host 'Bundling Microsoft Visual C++ runtime DLLs...'
 Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $stageRoot -Force
-Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $pythonRoot -Force
+Copy-Item -Path (Join-Path $crtDirectory '*.dll') -Destination $backendRoot -Force
 
-$embeddedPython = Join-Path $pythonRoot 'python.exe'
-$env:PYTHONUTF8 = '1'
-$env:LTP_PATH = Join-Path $backendRoot 'models\languagetool'
-$env:PATH = (Join-Path $javaRoot 'bin') + ';' + $env:PATH
-Push-Location $backendRoot
+# Smoke test: start the backend, check translation, then stop it.
+$backendExe = Join-Path $backendRoot 'lingosnap_backend.exe'
+if (-not (Test-Path -LiteralPath $backendExe)) { throw 'lingosnap_backend.exe is missing. Run tool\build_native.ps1 first.' }
+$probe = Start-Process -FilePath $backendExe -ArgumentList '--port', '8791' -WorkingDirectory $backendRoot -PassThru -WindowStyle Hidden
 try {
-    & $embeddedPython -c "import sys; sys.path.insert(0, '.'); import ctranslate2, sentencepiece, fastapi, uvicorn, onnxruntime, rapidocr, language_tool_python; from server import engines; engines.ensure_ready(); assert engines.translate('Hello world!'); result = engines.check_grammar('This are wrong.', 'en-US'); assert result['corrected'] != 'This are wrong.'; engines.close()"
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $body = '{"text":"Hello world!","sourceLanguage":"en","targetLanguage":"vi"}'
+    $translated = $null
+    for ($i = 0; $i -lt 60 -and -not $translated; $i++) {
+        Start-Sleep -Milliseconds 500
+        try { $translated = (Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8791/translate' -ContentType 'application/json' -Body $body).translated } catch { }
+    }
+    if (-not $translated) { throw 'Backend smoke test failed: no translation returned.' }
+    $grammar = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8791/grammar' -ContentType 'application/json' -Body '{"text":"This are wrong.","language":"en-US"}'
+    if ($grammar.corrected -eq 'This are wrong.') { throw 'Backend smoke test failed: grammar not corrected.' }
 }
 finally {
-    Pop-Location
+    if (-not $probe.HasExited) { Stop-Process -Id $probe.Id -Force }
 }
 
 Assert-ChildPath -Path $zipPath -Parent $portableRoot
