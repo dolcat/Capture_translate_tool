@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <numeric>
 #include <opencv2/imgcodecs.hpp>
@@ -153,14 +155,24 @@ cv::Mat CropQuad(const cv::Mat& img, const Quad& q) {
   return out;
 }
 
+// Same splitting as Python's str.splitlines(): the model's character list is stored
+// as one string, and a trailing line break must not create an extra empty entry
+// (that would shift the space/blank indices and drop every space from the output).
 std::vector<std::string> SplitLines(const std::string& s) {
   std::vector<std::string> out;
   std::string cur;
-  for (char c : s) {
-    if (c == '\n') { out.push_back(cur); cur.clear(); }
-    else cur.push_back(c);
+  auto starts = [&](size_t i, const char* seq) { return s.compare(i, std::strlen(seq), seq) == 0; };
+  for (size_t i = 0; i < s.size();) {
+    unsigned char c = s[i];
+    size_t skip = 0;
+    if (c == '\r') skip = (i + 1 < s.size() && s[i + 1] == '\n') ? 2 : 1;
+    else if (c == '\n' || c == 0x0b || c == 0x0c || c == 0x1c || c == 0x1d || c == 0x1e) skip = 1;
+    else if (starts(i, "\xC2\x85")) skip = 2;                                  // U+0085
+    else if (starts(i, "\xE2\x80\xA8") || starts(i, "\xE2\x80\xA9")) skip = 3;  // U+2028/2029
+    if (skip) { out.push_back(cur); cur.clear(); i += skip; }
+    else { cur.push_back(static_cast<char>(c)); ++i; }
   }
-  out.push_back(cur);
+  if (!cur.empty()) out.push_back(cur);
   return out;
 }
 
@@ -200,6 +212,12 @@ struct OcrEngine::Impl {
     dict = SplitLines(chars.get());
     dict.insert(dict.begin(), "blank");
     dict.push_back(" ");
+
+    // The recognizer's class axis must equal blank + characters + space.
+    auto classes = rec->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape().back();
+    if (classes > 0 && classes != static_cast<int64_t>(dict.size()))
+      std::cerr << "Cảnh báo: từ điển OCR có " << dict.size() << " mục nhưng model có "
+                << classes << " lớp; kết quả có thể sai.\n";
   }
 
   std::vector<Detected> Detect(const cv::Mat& img) const {
