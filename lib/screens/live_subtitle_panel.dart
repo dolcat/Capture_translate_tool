@@ -196,7 +196,7 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
             key: const Key('live-preview'),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppColors.translationSurface,
+              color: _colorOf(_c.settings.backgroundColor),
               borderRadius: BorderRadius.circular(12),
             ),
             constraints: const BoxConstraints(minHeight: 96),
@@ -206,28 +206,50 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
                     children: [
                       SelectableText(
                         status.translated,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 19,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                          color: _colorOf(_c.settings.textColor),
                           height: 1.4,
                         ),
                       ),
                       const SizedBox(height: 8),
                       SelectableText(
                         status.original,
-                        style: const TextStyle(
-                          color: AppColors.textMuted,
+                        style: TextStyle(
+                          color: _colorOf(
+                            _c.settings.textColor,
+                          ).withValues(alpha: 0.6),
                           height: 1.4,
                         ),
                       ),
                     ],
                   )
-                : Text(
-                    _c.isRunning
-                        ? 'Đang chờ phụ đề xuất hiện trong vùng đã chọn…'
-                        : 'Bản dịch sẽ hiện ở đây khi bạn bắt đầu.',
-                    style: const TextStyle(color: AppColors.textMuted),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Xem trước: phụ đề dịch sẽ trông như thế này.',
+                        key: const Key('live-preview-sample'),
+                        style: TextStyle(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w600,
+                          color: _colorOf(_c.settings.textColor),
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _c.isRunning
+                            ? 'Đang chờ phụ đề xuất hiện trong vùng đã chọn…'
+                            : 'Bản dịch thật sẽ hiện ở đây khi bạn bắt đầu.',
+                        style: TextStyle(
+                          color: _colorOf(
+                            _c.settings.textColor,
+                          ).withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
                   ),
           ),
           if (_c.isRunning) ...[
@@ -390,6 +412,24 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
             display: '${s.opacity}%',
             onChanged: (v) => _update((s) => s.copyWith(opacity: v.round())),
           ),
+          const SizedBox(height: 4),
+          _ColorField(
+            key: const Key('live-text-color-field'),
+            label: 'Màu chữ',
+            value: s.textColor,
+            presets: _textPresets,
+            onChanged: (hex) => _update((s) => s.copyWith(textColor: hex)),
+          ),
+          const SizedBox(height: 12),
+          _ColorField(
+            key: const Key('live-background-color-field'),
+            label: 'Màu nền',
+            value: s.backgroundColor,
+            presets: _backgroundPresets,
+            onChanged: (hex) =>
+                _update((s) => s.copyWith(backgroundColor: hex)),
+          ),
+          const SizedBox(height: 4),
           CheckboxListTile(
             contentPadding: EdgeInsets.zero,
             controlAffinity: ListTileControlAffinity.leading,
@@ -446,6 +486,122 @@ class _LiveSubtitlePanelState extends State<LiveSubtitlePanel> {
 }
 
 // -------------------------------------------------------------------- pieces
+
+const _textPresets = ['#FFFFFF', '#FFE066', '#7DF9FF', '#8CFF98', '#000000'];
+const _backgroundPresets = [
+  '#0C0C0E',
+  '#000000',
+  '#0B1B3A',
+  '#2B2B2B',
+  '#FFFFFF',
+];
+
+Color _colorOf(String hex) => Color(0xFF000000 | rgbOfHex(hex));
+
+/// A row of colour swatches plus a box to type any `#RRGGBB` value.
+class _ColorField extends StatefulWidget {
+  const _ColorField({
+    required this.label,
+    required this.value,
+    required this.presets,
+    required this.onChanged,
+    super.key,
+  });
+
+  final String label;
+  final String value;
+  final List<String> presets;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_ColorField> createState() => _ColorFieldState();
+}
+
+class _ColorFieldState extends State<_ColorField> {
+  late final TextEditingController _hex = TextEditingController(
+    text: widget.value,
+  );
+  bool _invalid = false;
+
+  @override
+  void didUpdateWidget(_ColorField old) {
+    super.didUpdateWidget(old);
+    // A swatch was tapped (or settings were reloaded): show the new value,
+    // but leave a half-typed hex alone.
+    if (normalizeHexColor(_hex.text) != widget.value) {
+      _hex.text = widget.value;
+      _invalid = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _hex.dispose();
+    super.dispose();
+  }
+
+  void _typed(String text) {
+    final hex = normalizeHexColor(text);
+    setState(() => _invalid = hex == null);
+    if (hex != null && hex != widget.value) widget.onChanged(hex);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(
+            widget.label,
+            style: const TextStyle(color: AppColors.text),
+          ),
+        ),
+        for (final preset in widget.presets)
+          Tooltip(
+            message: preset,
+            child: InkWell(
+              key: Key('${(widget.key as ValueKey<String>).value}-$preset'),
+              customBorder: const CircleBorder(),
+              onTap: () => widget.onChanged(preset),
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: _colorOf(preset),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: preset == widget.value
+                        ? AppColors.primary
+                        : AppColors.border,
+                    width: preset == widget.value ? 3 : 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        SizedBox(
+          width: 110,
+          child: TextField(
+            controller: _hex,
+            onChanged: _typed,
+            maxLength: 7,
+            decoration: InputDecoration(
+              isDense: true,
+              counterText: '',
+              border: const OutlineInputBorder(),
+              hintText: '#RRGGBB',
+              errorText: _invalid ? 'Sai mã màu' : null,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _Card extends StatelessWidget {
   const _Card({

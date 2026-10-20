@@ -73,6 +73,17 @@ class TermRule {
   }
 }
 
+/// Returns `#RRGGBB` (upper case) for text like `ff8800`, `#FF8800`, or null
+/// when it is not a valid six-digit hex colour.
+String? normalizeHexColor(String input) {
+  final text = input.trim().replaceFirst('#', '');
+  if (!RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(text)) return null;
+  return '#${text.toUpperCase()}';
+}
+
+/// The 24-bit RGB value of a colour from [normalizeHexColor].
+int rgbOfHex(String hex) => int.parse(hex.replaceFirst('#', ''), radix: 16);
+
 enum OverlayPosition {
   cover('cover', 'Che phụ đề gốc'),
   below('below', 'Bên dưới'),
@@ -100,8 +111,13 @@ class LiveSettings {
     this.fontSize = 28,
     this.opacity = 85,
     this.showOriginal = false,
+    this.textColor = defaultTextColor,
+    this.backgroundColor = defaultBackgroundColor,
     this.minimizeOnStart = true,
   });
+
+  static const defaultTextColor = '#FFFFFF';
+  static const defaultBackgroundColor = '#0C0C0E';
 
   factory LiveSettings.fromJson(Map<String, dynamic> json) {
     int readInt(String key, int fallback, int min, int max) {
@@ -127,6 +143,12 @@ class LiveSettings {
       fontSize: readInt('fontSize', 28, 12, 96),
       opacity: readInt('opacity', 85, 30, 100),
       showOriginal: json['showOriginal'] as bool? ?? false,
+      textColor:
+          normalizeHexColor(json['textColor'] as String? ?? '') ??
+          defaultTextColor,
+      backgroundColor:
+          normalizeHexColor(json['backgroundColor'] as String? ?? '') ??
+          defaultBackgroundColor,
       minimizeOnStart: json['minimizeOnStart'] as bool? ?? true,
     );
   }
@@ -142,6 +164,10 @@ class LiveSettings {
   final int fontSize;
   final int opacity;
   final bool showOriginal;
+
+  /// `#RRGGBB` colours of the subtitle text and its background bar.
+  final String textColor;
+  final String backgroundColor;
   final bool minimizeOnStart;
 
   LiveSettings copyWith({
@@ -156,6 +182,8 @@ class LiveSettings {
     int? fontSize,
     int? opacity,
     bool? showOriginal,
+    String? textColor,
+    String? backgroundColor,
     bool? minimizeOnStart,
   }) {
     return LiveSettings(
@@ -170,6 +198,8 @@ class LiveSettings {
       fontSize: fontSize ?? this.fontSize,
       opacity: opacity ?? this.opacity,
       showOriginal: showOriginal ?? this.showOriginal,
+      textColor: textColor ?? this.textColor,
+      backgroundColor: backgroundColor ?? this.backgroundColor,
       minimizeOnStart: minimizeOnStart ?? this.minimizeOnStart,
     );
   }
@@ -187,6 +217,8 @@ class LiveSettings {
     'fontSize': fontSize,
     'opacity': opacity,
     'showOriginal': showOriginal,
+    'textColor': textColor,
+    'backgroundColor': backgroundColor,
     'minimizeOnStart': minimizeOnStart,
   };
 
@@ -204,6 +236,8 @@ class LiveSettings {
       'fontSize': fontSize,
       'opacity': opacity,
       'showOriginal': showOriginal,
+      'textColor': textColor,
+      'backgroundColor': backgroundColor,
     },
   };
 }

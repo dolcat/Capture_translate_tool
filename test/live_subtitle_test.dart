@@ -60,6 +60,29 @@ void main() {
       expect((request['overlay'] as Map)['position'], 'below');
     });
 
+    test('colours are validated, saved and sent to the backend', () {
+      expect(normalizeHexColor('ff8800'), '#FF8800');
+      expect(normalizeHexColor(' #00aaFF '), '#00AAFF');
+      expect(normalizeHexColor('#fff'), isNull);
+      expect(normalizeHexColor('zzzzzz'), isNull);
+      expect(rgbOfHex('#FF8800'), 0xFF8800);
+
+      final settings = const LiveSettings().copyWith(
+        textColor: '#FFE066',
+        backgroundColor: '#0B1B3A',
+      );
+      final restored = LiveSettings.fromJson(settings.toJson());
+      expect(restored.textColor, '#FFE066');
+      expect(restored.backgroundColor, '#0B1B3A');
+      final overlay = settings.toBackendJson()['overlay'] as Map;
+      expect(overlay['textColor'], '#FFE066');
+      expect(overlay['backgroundColor'], '#0B1B3A');
+
+      // A corrupt file falls back to the defaults.
+      final broken = LiveSettings.fromJson({'textColor': 'nope'});
+      expect(broken.textColor, LiveSettings.defaultTextColor);
+    });
+
     test('clamps out-of-range numbers from a hand-edited file', () {
       final settings = LiveSettings.fromJson({
         'intervalMs': 5,
@@ -211,6 +234,43 @@ void main() {
             .text,
         'Zorvex',
       );
+    });
+
+    testWidgets('picking colours updates the preview and the settings', (
+      tester,
+    ) async {
+      await openLiveMode(tester, const Size(1280, 1400));
+      Text sample() =>
+          tester.widget<Text>(find.byKey(const Key('live-preview-sample')));
+      Color? previewBackground() =>
+          (tester
+                      .widget<Container>(find.byKey(const Key('live-preview')))
+                      .decoration
+                  as BoxDecoration)
+              .color;
+
+      expect(sample().style!.color, const Color(0xFFFFFFFF));
+      expect(previewBackground(), const Color(0xFF0C0C0E));
+
+      final swatch = find.byKey(const Key('live-text-color-field-#FFE066'));
+      await tester.ensureVisible(swatch);
+      await tester.tap(swatch);
+      await tester.pumpAndSettle();
+      expect(sample().style!.color, const Color(0xFFFFE066));
+
+      final field = find.descendant(
+        of: find.byKey(const Key('live-background-color-field')),
+        matching: find.byType(TextField),
+      );
+      await tester.ensureVisible(field);
+      await tester.enterText(field, '#123456');
+      await tester.pumpAndSettle();
+      expect(previewBackground(), const Color(0xFF123456));
+
+      await tester.enterText(field, '#12');
+      await tester.pumpAndSettle();
+      expect(find.text('Sai mã màu'), findsOneWidget);
+      expect(previewBackground(), const Color(0xFF123456));
     });
 
     for (final size in const [

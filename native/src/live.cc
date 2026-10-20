@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cstdio>
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
@@ -174,6 +175,24 @@ std::vector<Replacement> ParseReplacements(const json& j) {
   return out;
 }
 
+// "#RRGGBB" (the '#' is optional); anything else keeps the fallback.
+uint32_t ParseColor(const std::string& s, uint32_t fallback) {
+  std::string hex = !s.empty() && s[0] == '#' ? s.substr(1) : s;
+  if (hex.size() != 6) return fallback;
+  uint32_t value = 0;
+  for (char ch : hex) {
+    if (!std::isxdigit(static_cast<unsigned char>(ch))) return fallback;
+    value = value * 16 + (std::isdigit(static_cast<unsigned char>(ch)) ? ch - '0' : std::tolower(ch) - 'a' + 10);
+  }
+  return value;
+}
+
+std::string ColorString(uint32_t rgb) {
+  char buf[8];
+  std::snprintf(buf, sizeof(buf), "#%06X", rgb & 0xFFFFFF);
+  return buf;
+}
+
 LiveConfig ParseConfig(const json& j, LiveConfig c) {
   if (!j.is_object()) return c;
   if (j.contains("region") && j["region"].is_object()) {
@@ -197,6 +216,8 @@ LiveConfig ParseConfig(const json& j, LiveConfig c) {
     c.font_size = Clamp(o.value("fontSize", c.font_size), 12, 96);
     c.opacity = Clamp(o.value("opacity", c.opacity), 30, 100);
     c.show_original = o.value("showOriginal", c.show_original);
+    c.text_rgb = ParseColor(o.value("textColor", ""), c.text_rgb);
+    c.bg_rgb = ParseColor(o.value("backgroundColor", ""), c.bg_rgb);
     c.exclude_from_capture = o.value("excludeFromCapture", c.exclude_from_capture);
   }
   return c;
@@ -213,7 +234,9 @@ json ConfigJson(const LiveConfig& c) {
           {"beamSize", c.beam_size}, {"pre", list(c.pre)}, {"post", list(c.post)},
           {"overlay", {{"enabled", c.overlay_enabled}, {"position", c.overlay_position},
                        {"fontSize", c.font_size}, {"opacity", c.opacity},
-                       {"showOriginal", c.show_original}, {"excludeFromCapture", c.exclude_from_capture}}}};
+                       {"showOriginal", c.show_original}, {"textColor", ColorString(c.text_rgb)},
+                       {"backgroundColor", ColorString(c.bg_rgb)},
+                       {"excludeFromCapture", c.exclude_from_capture}}}};
 }
 
 // ------------------------------------------------------------ platform layer
@@ -358,6 +381,8 @@ class Ui {
     }
     SetWindowDisplayAffinity(overlay_, c.exclude_from_capture ? 0x11 /*WDA_EXCLUDEFROMCAPTURE*/ : 0);
 
+    text_rgb_ = c.text_rgb;
+    bg_rgb_ = c.bg_rgb;
     translated_ = Widen(s.translated);
     original_ = c.show_original ? Widen(s.original) : L"";
     if (main_font_) DeleteObject(main_font_);
@@ -432,7 +457,8 @@ class Ui {
   }
 
   void PaintOverlay(HDC dc) {
-    HBRUSH bg = CreateSolidBrush(RGB(12, 12, 14));
+    auto rgb = [](uint32_t c) { return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF); };
+    HBRUSH bg = CreateSolidBrush(rgb(bg_rgb_));
     RECT all{0, 0, width_, height_};
     FillRect(dc, &all, bg);
     DeleteObject(bg);
@@ -441,12 +467,17 @@ class Ui {
     int top = std::max(pad_, (height_ - content) / 2);
     RECT main_rc{pad_, top, width_ - pad_, top + main_h_};
     HGDIOBJ old = SelectObject(dc, main_font_);
-    SetTextColor(dc, RGB(255, 255, 255));
+    SetTextColor(dc, rgb(text_rgb_));
     DrawTextW(dc, translated_.c_str(), -1, &main_rc, DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
     if (small_h_ > 0) {
       RECT small_rc{pad_, top + main_h_ + gap_, width_ - pad_, top + main_h_ + gap_ + small_h_};
       SelectObject(dc, small_font_);
-      SetTextColor(dc, RGB(170, 175, 185));
+      // The original line is the text colour faded 40% toward the background.
+      auto mix = [&](int shift) {
+        int t = (text_rgb_ >> shift) & 0xFF, b = (bg_rgb_ >> shift) & 0xFF;
+        return (t * 6 + b * 4) / 10;
+      };
+      SetTextColor(dc, RGB(mix(16), mix(8), mix(0)));
       DrawTextW(dc, original_.c_str(), -1, &small_rc, DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
     }
     SelectObject(dc, old);
@@ -587,6 +618,7 @@ class Ui {
   HWND overlay_ = nullptr, selector_ = nullptr;
   HFONT main_font_ = nullptr, small_font_ = nullptr;
   std::wstring translated_, original_;
+  uint32_t text_rgb_ = 0xFFFFFF, bg_rgb_ = 0x0C0C0E;
   int pad_ = 14, main_h_ = 0, small_h_ = 0, gap_ = 0, width_ = 0, height_ = 0;
   std::shared_ptr<Pending> active_;
   POINT sel_origin_{0, 0}, sel_a_{0, 0}, sel_b_{0, 0};

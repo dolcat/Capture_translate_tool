@@ -36,6 +36,8 @@ struct LiveConfig {
   int font_size = 28;
   int opacity = 85;  // percent
   bool show_original = false;
+  uint32_t text_rgb = 0xFFFFFF;  // 0xRRGGBB
+  uint32_t bg_rgb = 0x0C0C0E;
   bool exclude_from_capture = true;  // keep the overlay out of our own screenshots
 };
 
