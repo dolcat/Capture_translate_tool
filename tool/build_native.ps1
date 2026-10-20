@@ -40,7 +40,7 @@ if (-not (Test-Path $ct2Install)) {
 $cvSrc = Get-Source 'https://github.com/opencv/opencv' '4.13.0' 'opencv'
 $cvInstall = Join-Path $deps 'opencv-install'
 if (-not (Test-Path $cvInstall)) {
-    Invoke-Checked { cmake -S $cvSrc -B (Join-Path $deps 'opencv-build') -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_WITH_STATIC_CRT=OFF" "-DBUILD_LIST=core,imgproc,imgcodecs" "-DWITH_FFMPEG=OFF" "-DWITH_OPENCL=OFF" "-DWITH_IPP=OFF" "-DWITH_ITT=OFF" "-DWITH_TIFF=OFF" "-DWITH_WEBP=OFF" "-DWITH_OPENEXR=OFF" "-DWITH_JASPER=OFF" "-DWITH_OPENJPEG=OFF" "-DWITH_PROTOBUF=OFF" "-DBUILD_PROTOBUF=OFF" "-DBUILD_TESTS=OFF" "-DBUILD_PERF_TESTS=OFF" "-DBUILD_EXAMPLES=OFF" "-DBUILD_opencv_apps=OFF" "-DBUILD_DOCS=OFF" "-DCMAKE_INSTALL_PREFIX=$cvInstall" }
+    Invoke-Checked { cmake -S $cvSrc -B (Join-Path $deps 'opencv-build') -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_WITH_STATIC_CRT=OFF" "-DBUILD_LIST=core,imgproc,imgcodecs" "-DWITH_FFMPEG=OFF" "-DWITH_OPENCL=OFF" "-DWITH_IPP=OFF" "-DWITH_ITT=OFF" "-DWITH_TIFF=OFF" "-DWITH_WEBP=OFF" "-DWITH_OPENEXR=OFF" "-DWITH_JASPER=OFF" "-DWITH_OPENJPEG=OFF" "-DWITH_PROTOBUF=OFF" "-DBUILD_PROTOBUF=OFF" "-DWITH_ADE=OFF" "-DBUILD_opencv_gapi=OFF" "-DBUILD_TESTS=OFF" "-DBUILD_PERF_TESTS=OFF" "-DBUILD_EXAMPLES=OFF" "-DBUILD_opencv_apps=OFF" "-DBUILD_DOCS=OFF" "-DCMAKE_INSTALL_PREFIX=$cvInstall" }
     Invoke-Checked { cmake --build (Join-Path $deps 'opencv-build') --config Release -j }
     Invoke-Checked { cmake --install (Join-Path $deps 'opencv-build') --config Release }
 }
