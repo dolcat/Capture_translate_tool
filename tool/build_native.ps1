@@ -60,6 +60,12 @@ $build = Join-Path $work 'build'
 Invoke-Checked { cmake -S (Join-Path $projectRoot 'native') -B $build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DONNXRUNTIME_ROOT=$ort" "-DLS_THIRD_PARTY=$deps" "-DOpenCV_DIR=$cvDir" "-DCMAKE_PREFIX_PATH=$ct2Install" }
 Invoke-Checked { cmake --build $build --config Release -j }
 
+# A backend left running by the app locks the staged files.
+$stagedExe = Join-Path $stage 'lingosnap_backend.exe'
+Get-Process lingosnap_backend -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $stagedExe } |
+    ForEach-Object { Write-Host "Stopping running backend (PID $($_.Id))"; $_ | Stop-Process -Force; $_.WaitForExit(5000) | Out-Null }
+
 Copy-Item (Join-Path $build 'Release\lingosnap_backend.exe') $stage -Force
 Copy-Item (Join-Path $ort 'lib\onnxruntime.dll') $stage -Force
 Copy-Item (Join-Path $ct2Install 'bin\ctranslate2.dll') $stage -Force
