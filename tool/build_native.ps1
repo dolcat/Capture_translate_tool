@@ -50,8 +50,14 @@ Get-Source 'https://github.com/google/sentencepiece' 'v0.2.2' 'sp' | Out-Null
 Get-Source 'https://github.com/yhirose/cpp-httplib' 'v0.62.0' 'httplib' | Out-Null
 Get-Source 'https://github.com/nlohmann/json' 'v3.12.0' 'nlohmann' | Out-Null
 
+# On Windows the static OpenCV package lives in x64\vcNN\staticlib; point CMake straight at it.
+$cvConfig = Get-ChildItem -LiteralPath $cvInstall -Recurse -Filter OpenCVConfig.cmake |
+    Where-Object { $_.FullName -match 'staticlib' } | Select-Object -First 1
+if (-not $cvConfig) { throw "OpenCV static package not found under $cvInstall" }
+$cvDir = $cvConfig.Directory.FullName
+
 $build = Join-Path $work 'build'
-Invoke-Checked { cmake -S (Join-Path $projectRoot 'native') -B $build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DONNXRUNTIME_ROOT=$ort" "-DLS_THIRD_PARTY=$deps" "-DCMAKE_PREFIX_PATH=$ct2Install;$cvInstall" }
+Invoke-Checked { cmake -S (Join-Path $projectRoot 'native') -B $build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DONNXRUNTIME_ROOT=$ort" "-DLS_THIRD_PARTY=$deps" "-DOpenCV_DIR=$cvDir" "-DCMAKE_PREFIX_PATH=$ct2Install" }
 Invoke-Checked { cmake --build $build --config Release -j }
 
 Copy-Item (Join-Path $build 'Release\lingosnap_backend.exe') $stage -Force
