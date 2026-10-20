@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/app_theme.dart';
 import '../models/analysis_result.dart';
+import '../models/grammar_result.dart';
 import '../services/app_window_service.dart';
 import '../services/capture_service.dart';
 import '../services/grammar_service.dart';
@@ -16,6 +17,7 @@ import '../services/live_subtitle_controller.dart';
 import '../services/live_subtitle_service.dart';
 import '../services/shortcut_preferences.dart';
 import '../services/translation_service.dart';
+import '../widgets/grammar_issues_card.dart';
 import '../widgets/translation_panel.dart';
 import 'live_subtitle_panel.dart';
 
@@ -77,6 +79,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
   final FocusNode _grammarFocusNode = FocusNode();
   String _translatedText = '';
   String _correctedText = '';
+  GrammarResult? _grammarResult;
+  GrammarChoices _grammarChoices = const GrammarChoices();
   int _grammarIssueCount = 0;
   Future<void>? _grammarWarmUpFuture;
   bool _grammarIsReady = false;
@@ -426,6 +430,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
       );
       if (!mounted) return;
       setState(() {
+        _grammarResult = result;
+        _grammarChoices = const GrammarChoices();
         _correctedText = result.correctedText;
         _grammarIssueCount = result.issueCount;
         _grammarIsReady = true;
@@ -436,6 +442,46 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
     } catch (error) {
       _showGrammarError('Không thể kiểm tra ngữ pháp: $error');
     }
+  }
+
+  /// Recomputes the corrected text after the user picked other suggestions.
+  void _setGrammarChoices(GrammarChoices choices) {
+    final result = _grammarResult;
+    if (result == null || !result.hasDetails) return;
+    setState(() {
+      _grammarChoices = choices;
+      _correctedText = applyGrammarChoices(
+        result.sourceText,
+        result.matches,
+        choices,
+      );
+      _grammarIssueCount = countAppliedFixes(
+        result.sourceText,
+        result.matches,
+        choices,
+      );
+    });
+  }
+
+  Widget? _buildGrammarIssues() {
+    final result = _grammarResult;
+    if (result == null || !result.hasDetails) return null;
+    return GrammarIssuesCard(
+      sourceText: result.sourceText,
+      matches: result.matches,
+      choices: _grammarChoices,
+      onPick: (index, pick) =>
+          _setGrammarChoices(_grammarChoices.withPick(index, pick)),
+      onApplyBest: () => _setGrammarChoices(
+        const GrammarChoices().all(result.matches, (_) => 0),
+      ),
+      onKeepAll: () => _setGrammarChoices(
+        const GrammarChoices().all(
+          result.matches,
+          (_) => GrammarChoices.keepOriginal,
+        ),
+      ),
+    );
   }
 
   Future<void> _warmUpGrammar() async {
@@ -496,6 +542,8 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
         _grammarStatus = GrammarStatus.idle;
         _grammarController.clear();
         _correctedText = '';
+        _grammarResult = null;
+        _grammarChoices = const GrammarChoices();
         _grammarIssueCount = 0;
         _grammarErrorMessage = null;
       });
@@ -722,6 +770,7 @@ class _TranslationWorkspaceState extends State<TranslationWorkspace> {
                                           sourceFocusNode: _grammarFocusNode,
                                           correctedText: _correctedText,
                                           issueCount: _grammarIssueCount,
+                                          issues: _buildGrammarIssues(),
                                           onCheck: _checkGrammar,
                                           onRetry: _checkGrammar,
                                           onCopyOriginal: () =>
@@ -1199,6 +1248,7 @@ class _GrammarCard extends StatelessWidget {
     required this.sourceFocusNode,
     required this.correctedText,
     required this.issueCount,
+    required this.issues,
     required this.onCheck,
     required this.onRetry,
     required this.onCopyOriginal,
@@ -1211,6 +1261,7 @@ class _GrammarCard extends StatelessWidget {
   final FocusNode sourceFocusNode;
   final String correctedText;
   final int issueCount;
+  final Widget? issues;
   final VoidCallback onCheck;
   final VoidCallback onRetry;
   final VoidCallback onCopyOriginal;
@@ -1237,7 +1288,11 @@ class _GrammarCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _GrammarBar(status: status, issueCount: issueCount),
+            _GrammarBar(
+              status: status,
+              issueCount: issueCount,
+              hasDetails: issues != null,
+            ),
             if (status == GrammarStatus.error && errorMessage != null) ...[
               const SizedBox(height: 12),
               _ErrorBanner(message: errorMessage!, onRetry: onRetry),
@@ -1304,6 +1359,7 @@ class _GrammarCard extends StatelessWidget {
                 );
               },
             ),
+            if (issues != null) ...[const SizedBox(height: 14), issues!],
           ],
         ),
       ),
@@ -1312,10 +1368,15 @@ class _GrammarCard extends StatelessWidget {
 }
 
 class _GrammarBar extends StatelessWidget {
-  const _GrammarBar({required this.status, required this.issueCount});
+  const _GrammarBar({
+    required this.status,
+    required this.issueCount,
+    required this.hasDetails,
+  });
 
   final GrammarStatus status;
   final int issueCount;
+  final bool hasDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -1323,6 +1384,8 @@ class _GrammarBar extends StatelessWidget {
       GrammarStatus.idle => 'Sẵn sàng',
       GrammarStatus.warmingUp => 'Đang khởi động LanguageTool…',
       GrammarStatus.checking => 'Đang kiểm tra ngữ pháp…',
+      GrammarStatus.success when issueCount == 0 && hasDetails =>
+        'Chưa áp dụng gợi ý nào',
       GrammarStatus.success when issueCount == 0 => 'Không phát hiện lỗi',
       GrammarStatus.success => 'Đã sửa $issueCount lỗi',
       GrammarStatus.error => 'Cần thử lại',

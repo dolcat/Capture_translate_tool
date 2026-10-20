@@ -215,7 +215,13 @@ int main(int argc, char** argv) {
       auto r = engines.Grammar().Check(text);
       engines.MarkGrammarReady();
       if (warmup) return Ok(res, {{"ready", true}});
-      Ok(res, {{"corrected", r.corrected}, {"issueCount", r.issue_count}});
+      json matches = json::array();
+      for (const auto& m : r.matches)
+        matches.push_back({{"offset", m.offset}, {"length", m.length}, {"message", m.message},
+                           {"shortMessage", m.short_message}, {"ruleId", m.rule_id},
+                           {"category", m.category}, {"replacements", m.replacements}});
+      Ok(res, {{"corrected", r.corrected}, {"issueCount", r.issue_count}, {"text", text},
+               {"matches", matches}});
     } catch (const std::exception& e) {
       Fail(res, 503, e.what());
     }

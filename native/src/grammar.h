@@ -3,14 +3,23 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "process.h"
 
 namespace lingosnap {
 
+// One problem LanguageTool found. Offsets count UTF-16 code units, like Dart strings.
+struct GrammarMatch {
+  size_t offset = 0, length = 0;
+  std::string message, short_message, rule_id, category;
+  std::vector<std::string> replacements;  // best first, at most 5
+};
+
 struct GrammarResult {
   std::string corrected;
   int issue_count = 0;
+  std::vector<GrammarMatch> matches;
 };
 
 // Runs LanguageTool's HTTP server (Java) as a child process and applies the first

@@ -151,13 +151,28 @@ GrammarResult GrammarChecker::Check(const std::string& text) {
   std::u16string chars = ToUtf16(text);
   struct Edit { size_t off, len; std::u16string repl; };
   std::vector<Edit> edits;
+  GrammarResult result;
   for (const auto& m : json.value("matches", nlohmann::json::array())) {
     const auto& reps = m.value("replacements", nlohmann::json::array());
+    GrammarMatch gm;
+    gm.offset = m.value("offset", 0);
+    gm.length = m.value("length", 0);
+    gm.message = m.value("message", "");
+    gm.short_message = m.value("shortMessage", "");
+    if (m.contains("rule") && m["rule"].is_object()) {
+      gm.rule_id = m["rule"].value("id", "");
+      if (m["rule"].contains("category") && m["rule"]["category"].is_object())
+        gm.category = m["rule"]["category"].value("name", "");
+    }
+    for (const auto& r : reps) {
+      if (gm.replacements.size() >= 5) break;
+      if (r.contains("value") && r["value"].is_string()) gm.replacements.push_back(r["value"].get<std::string>());
+    }
+    result.matches.push_back(std::move(gm));
     if (reps.empty()) continue;
     edits.push_back({m.at("offset").get<size_t>(), m.at("length").get<size_t>(),
                      ToUtf16(reps[0].at("value").get<std::string>())});
   }
-  GrammarResult result;
   result.issue_count = static_cast<int>(edits.size());
   long shift = 0;
   for (const auto& e : edits) {

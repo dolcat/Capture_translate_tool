@@ -51,9 +51,7 @@ class BackendProcessManager {
         environment: _processEnvironment(executable.parent),
       );
     } on ProcessException catch (error) {
-      throw BackendStartException(
-        'Không thể mở backend: ${error.message}',
-      );
+      throw BackendStartException('Không thể mở backend: ${error.message}');
     }
 
     _stdoutSubscription = _process!.stdout
@@ -116,7 +114,9 @@ class BackendProcessManager {
     void addFrom(Directory directory) {
       candidates
         ..add('${directory.path}${sep}backend${sep}lingosnap_backend.exe')
-        ..add('${directory.path}${sep}data${sep}backend${sep}lingosnap_backend.exe')
+        ..add(
+          '${directory.path}${sep}data${sep}backend${sep}lingosnap_backend.exe',
+        )
         ..add(
           '${directory.path}${sep}build${sep}native${sep}stage'
           '${sep}lingosnap_backend.exe',
