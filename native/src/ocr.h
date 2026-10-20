@@ -12,6 +12,8 @@ struct OcrLine {
   float score = 0.f;
   // Axis-aligned box in source image pixels: x0, y0, x1, y1.
   float box[4] = {0, 0, 0, 0};
+  // A bullet mark (dot/square) sits just left of the box; the detector skips it.
+  bool bullet = false;
 };
 
 // PP-OCRv5 mobile detection + English recognition running on ONNX Runtime.

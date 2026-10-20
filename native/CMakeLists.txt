@@ -25,7 +25,7 @@ add_subdirectory(${LS_THIRD_PARTY}/sp ${CMAKE_BINARY_DIR}/sentencepiece EXCLUDE_
 find_library(ORT_LIB onnxruntime PATHS ${ONNXRUNTIME_ROOT}/lib NO_DEFAULT_PATH REQUIRED)
 
 add_executable(lingosnap_backend
-  src/main.cc src/ocr.cc src/translator.cc src/grammar.cc src/process.cc)
+  src/main.cc src/layout.cc src/ocr.cc src/translator.cc src/grammar.cc src/process.cc)
 target_include_directories(lingosnap_backend PRIVATE
   ${ONNXRUNTIME_ROOT}/include
   ${LS_THIRD_PARTY}/httplib

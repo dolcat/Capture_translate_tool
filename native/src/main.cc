@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "grammar.h"
+#include "layout.h"
 #include "ocr.h"
 #include "translator.h"
 
@@ -141,9 +142,12 @@ int main(int argc, char** argv) {
   Engines engines(models, ExecutableDir() / "java");
 
   if (!ocr_image.empty()) {
-    for (const auto& l : engines.Ocr().Recognize(Utf8Path(ocr_image)))
+    auto lines = engines.Ocr().Recognize(Utf8Path(ocr_image));
+    for (const auto& l : lines)
       std::cout << l.score << "\t[" << l.box[0] << "," << l.box[1] << "," << l.box[2] << ","
-                << l.box[3] << "]\t" << l.text << "\n";
+                << l.box[3] << "]" << (l.bullet ? "\t(bullet)" : "") << "\t" << l.text << "\n";
+    std::cout << "--- paragraphs ---\n";
+    for (const auto& p : lingosnap::BuildParagraphs(lines)) std::cout << p << "\n";
     return 0;
   }
 
@@ -167,11 +171,13 @@ int main(int argc, char** argv) {
       auto& mt = engines.Mt();
       auto lines = engines.Ocr().Recognize(image);
       if (lines.empty()) return Ok(res, {{"items", json::array()}});
+      // Paragraphs and list items, one per line, so the layout survives translation.
       std::string original;
+      for (const auto& p : lingosnap::BuildParagraphs(lines))
+        original += (original.empty() ? "" : "\n") + p;
       double sum = 0;
       float box[4] = {1e30f, 1e30f, 0, 0};
       for (size_t i = 0; i < lines.size(); ++i) {
-        original += (i ? "\n" : "") + lines[i].text;
         sum += lines[i].score;
         box[0] = std::min(box[0], lines[i].box[0]); box[1] = std::min(box[1], lines[i].box[1]);
         box[2] = std::max(box[2], lines[i].box[2]); box[3] = std::max(box[3], lines[i].box[3]);

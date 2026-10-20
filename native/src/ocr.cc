@@ -42,6 +42,40 @@ cv::Mat LoadImage(const std::filesystem::path& path) {
   return img;
 }
 
+// Looks for a lone, roughly square blob (•, ▪, ◦) in the strip left of a text box.
+// Small marks like these are usually not picked up by the text detector.
+bool HasBulletMark(const cv::Mat& gray, const float box[4]) {
+  float h = box[3] - box[1];
+  int x0 = std::max(0, static_cast<int>(box[0] - 1.6f * h));
+  int x1 = std::min(gray.cols, static_cast<int>(box[0]));
+  int y0 = std::max(0, static_cast<int>(box[1]));
+  int y1 = std::min(gray.rows, static_cast<int>(box[3]));
+  if (x1 - x0 < 4 || y1 - y0 < 4) return false;
+
+  cv::Mat roi = gray(cv::Rect(x0, y0, x1 - x0, y1 - y0));
+  std::vector<uchar> px(roi.begin<uchar>(), roi.end<uchar>());
+  std::nth_element(px.begin(), px.begin() + px.size() / 2, px.end());
+  int background = px[px.size() / 2];
+  cv::Mat diff, mask;
+  cv::absdiff(roi, cv::Scalar(background), diff);
+  cv::threshold(diff, mask, 60, 255, cv::THRESH_BINARY);
+
+  cv::Mat labels, stats, centroids;
+  int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids, 8);
+  int found = 0, other = 0;
+  for (int i = 1; i < n; ++i) {
+    int w = stats.at<int>(i, cv::CC_STAT_WIDTH), ht = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+    int area = stats.at<int>(i, cv::CC_STAT_AREA);
+    if (area < 3) continue;  // noise
+    float aspect = static_cast<float>(w) / ht;
+    float cy = static_cast<float>(centroids.at<double>(i, 1)) / (y1 - y0);
+    bool mark = w >= 0.12f * h && w <= 0.6f * h && ht >= 0.12f * h && ht <= 0.6f * h &&
+                aspect > 0.6f && aspect < 1.6f && cy > 0.25f && cy < 0.75f;
+    (mark ? found : other)++;
+  }
+  return found == 1 && other == 0;
+}
+
 // RapidOCR resize_image_within_bounds: only touches images outside [30, 2000].
 cv::Mat ResizeWithinBounds(const cv::Mat& src, double& ratio_h, double& ratio_w) {
   ratio_h = ratio_w = 1.0;
@@ -395,6 +429,10 @@ std::vector<OcrLine> OcrEngine::Recognize(const std::filesystem::path& image_pat
     l.box[2] = static_cast<float>(x1 * ratio_w); l.box[3] = static_cast<float>(y1 * ratio_h);
     lines.push_back(std::move(l));
   }
+  cv::Mat gray;
+  cv::cvtColor(original, gray, cv::COLOR_BGR2GRAY);
+  for (auto& l : lines) l.bullet = HasBulletMark(gray, l.box);
+
   // Same final ordering as the Python server: by top, then left.
   std::stable_sort(lines.begin(), lines.end(), [](const OcrLine& a, const OcrLine& b) {
     return a.box[1] != b.box[1] ? a.box[1] < b.box[1] : a.box[0] < b.box[0];
