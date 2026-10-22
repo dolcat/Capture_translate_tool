@@ -22,10 +22,10 @@ function Get-Model {
     }
 }
 
-# OCR: PP-OCRv5 mobile detection + English recognition (ONNX, from RapidOCR v3.9.2).
-$ocrBase = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5'
-Get-Model "$ocrBase/det/ch_PP-OCRv5_det_mobile.onnx" (Join-Path $ModelsDir 'rapidocr\ch_PP-OCRv5_det_mobile.onnx') '4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae'
-Get-Model "$ocrBase/rec/en_PP-OCRv5_rec_mobile.onnx" (Join-Path $ModelsDir 'rapidocr\en_PP-OCRv5_rec_mobile.onnx') 'c3461add59bb4323ecba96a492ab75e06dda42467c9e3d0c18db5d1d21924be8'
+# OCR: PP-OCRv6 small detection + multilingual recognition (ONNX, from RapidOCR v3.9.2).
+$ocrBase = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6'
+Get-Model "$ocrBase/det/PP-OCRv6_det_small.onnx" (Join-Path $ModelsDir 'rapidocr\PP-OCRv6_det_small.onnx') '090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f'
+Get-Model "$ocrBase/rec/PP-OCRv6_rec_small.onnx" (Join-Path $ModelsDir 'rapidocr\PP-OCRv6_rec_small.onnx') '6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884'
 
 # Translation: Argos English -> Vietnamese (CTranslate2 model + SentencePiece).
 $mtDir = Join-Path $ModelsDir 'argos-en-vi'

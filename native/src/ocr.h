@@ -17,7 +17,7 @@ struct OcrLine {
   bool bullet = false;
 };
 
-// PP-OCRv5 mobile detection + English recognition running on ONNX Runtime.
+// PP-OCRv6 small detection + multilingual (English/Latin) recognition running on ONNX Runtime.
 // Mirrors the RapidOCR pipeline the Python backend used (no angle classifier).
 class OcrEngine {
  public:

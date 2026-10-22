@@ -1,6 +1,6 @@
 # LingoSnap
 
-Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng PP-OCRv5 chạy trên ONNX Runtime (C++) và dịch
+Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng PP-OCRv6 small chạy trên ONNX Runtime (C++) và dịch
 English → Vietnamese bằng Argos/CTranslate2 (C++) và kiểm tra ngữ pháp tiếng Anh bằng
 LanguageTool, hoàn toàn offline.
 

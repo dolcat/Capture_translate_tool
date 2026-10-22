@@ -38,8 +38,8 @@ class Engines {
                      "languagetool-server.jar",
                  std::move(java_dir)) {}
 
-  fs::path ocr_det() const { return models_ / "rapidocr" / "ch_PP-OCRv5_det_mobile.onnx"; }
-  fs::path ocr_rec() const { return models_ / "rapidocr" / "en_PP-OCRv5_rec_mobile.onnx"; }
+  fs::path ocr_det() const { return models_ / "rapidocr" / "PP-OCRv6_det_small.onnx"; }
+  fs::path ocr_rec() const { return models_ / "rapidocr" / "PP-OCRv6_rec_small.onnx"; }
   fs::path mt_dir() const { return models_ / "argos-en-vi"; }
 
   bool models_ready() const {

@@ -7,7 +7,7 @@ giữ nguyên giao diện HTTP để Flutter không phải đổi hợp đồng:
 
 | Phần | Cách làm |
 |---|---|
-| OCR | `src/ocr.cc`: PP-OCRv5 mobile (det + rec) chạy bằng ONNX Runtime; tiền xử lý, hậu xử lý DB, cắt dòng và giải mã CTC làm lại theo RapidOCR, dùng OpenCV (core/imgproc/imgcodecs) |
+| OCR | `src/ocr.cc`: PP-OCRv6 small (det + rec) chạy bằng ONNX Runtime; tiền xử lý, hậu xử lý DB, cắt dòng và giải mã CTC làm lại theo RapidOCR, dùng OpenCV (core/imgproc/imgcodecs) |
 | Dịch | `src/translator.cc`: SentencePiece + API C++ của CTranslate2 (INT8, CPU, beam 2) |
 | Ngữ pháp | `src/grammar.cc`: chạy LanguageTool (Java) làm tiến trình con, backend C++ gọi `/v2/check` và áp dụng gợi ý đầu tiên |
 | Bố cục | `src/layout.cc`: dựng lại đoạn văn và gạch đầu dòng từ vị trí các dòng OCR |
