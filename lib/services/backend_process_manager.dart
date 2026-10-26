@@ -5,7 +5,7 @@ import 'dart:io';
 class BackendProcessManager {
   BackendProcessManager({
     Uri? healthEndpoint,
-    this.startupTimeout = const Duration(seconds: 12),
+    this.startupTimeout = const Duration(seconds: 8),
   }) : healthEndpoint =
            healthEndpoint ?? Uri.parse('http://127.0.0.1:8765/health');
 
@@ -33,33 +33,25 @@ class BackendProcessManager {
   }
 
   Future<void> _startAndWait() async {
-    final serverScript = _findServerScript();
-    if (serverScript == null) {
+    final executable = _findBackendExecutable();
+    if (executable == null) {
       throw const BackendStartException(
-        'Không tìm thấy backend/server.py trong bộ cài.',
+        'Không tìm thấy lingosnap_backend.exe. Hãy chạy '
+        'tool\\build_native.ps1 hoặc dùng bộ cài portable.',
       );
     }
 
-    final python = _findPythonExecutable(serverScript.parent);
-    if (python == null) {
-      throw const BackendStartException(
-        'Không tìm thấy python.exe. Hãy cài Python 3.11 rồi chạy '
-        'backend\\setup_backend.ps1.',
-      );
-    }
     _recentOutput.clear();
     try {
       _process = await Process.start(
-        python,
-        [serverScript.path, '--host', '127.0.0.1', '--port', '8765'],
-        workingDirectory: serverScript.parent.path,
+        executable.path,
+        ['--host', '127.0.0.1', '--port', '8765'],
+        workingDirectory: executable.parent.path,
         runInShell: false,
-        environment: _processEnvironment(serverScript.parent),
+        environment: _processEnvironment(executable.parent),
       );
     } on ProcessException catch (error) {
-      throw BackendStartException(
-        'Không thể mở Python để chạy backend: ${error.message}',
-      );
+      throw BackendStartException('Không thể mở backend: ${error.message}');
     }
 
     _stdoutSubscription = _process!.stdout
@@ -74,7 +66,7 @@ class BackendProcessManager {
     final deadline = DateTime.now().add(startupTimeout);
     while (DateTime.now().isBefore(deadline)) {
       if (await _isHealthy()) return;
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
 
     final details = _recentOutput.isEmpty
@@ -86,25 +78,10 @@ class BackendProcessManager {
   }
 
   Map<String, String> _processEnvironment(Directory backendDirectory) {
-    final environment = <String, String>{
-      'PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK': 'True',
-      'PYTHONUTF8': '1',
-      'LTP_PATH':
-          '${backendDirectory.path}${Platform.pathSeparator}models'
-          '${Platform.pathSeparator}languagetool',
-    };
-    final bundledJavaBin = Directory(
-      '${backendDirectory.path}${Platform.pathSeparator}java'
-      '${Platform.pathSeparator}bin',
-    );
-    if (File(
-      '${bundledJavaBin.path}${Platform.pathSeparator}java.exe',
-    ).existsSync()) {
-      final systemPath =
-          Platform.environment['PATH'] ?? Platform.environment['Path'] ?? '';
-      environment['PATH'] = systemPath.isEmpty
-          ? bundledJavaBin.path
-          : '${bundledJavaBin.path};$systemPath';
+    final environment = <String, String>{};
+    final modelsDirectory = _findModelsDirectory(backendDirectory);
+    if (modelsDirectory != null) {
+      environment['LINGOSNAP_MODELS'] = modelsDirectory.path;
     }
     return environment;
   }
@@ -129,17 +106,20 @@ class BackendProcessManager {
     }
   }
 
-  File? _findServerScript() {
+  /// Looks for the native backend next to the app (portable package), then in
+  /// the repository build output used during development.
+  File? _findBackendExecutable() {
+    final sep = Platform.pathSeparator;
     final candidates = <String>[];
     void addFrom(Directory directory) {
       candidates
+        ..add('${directory.path}${sep}backend${sep}lingosnap_backend.exe')
         ..add(
-          '${directory.path}${Platform.pathSeparator}backend'
-          '${Platform.pathSeparator}server.py',
+          '${directory.path}${sep}data${sep}backend${sep}lingosnap_backend.exe',
         )
         ..add(
-          '${directory.path}${Platform.pathSeparator}data'
-          '${Platform.pathSeparator}backend${Platform.pathSeparator}server.py',
+          '${directory.path}${sep}build${sep}native${sep}stage'
+          '${sep}lingosnap_backend.exe',
         );
     }
 
@@ -158,37 +138,24 @@ class BackendProcessManager {
 
     for (final path in candidates) {
       final file = File(path);
-      if (file.existsSync()) return file;
+      if (file.existsSync()) return file.absolute;
     }
     return null;
   }
 
-  String? _findPythonExecutable(Directory backendDirectory) {
-    final bundledPython = File(
-      '${backendDirectory.path}${Platform.pathSeparator}python'
-      '${Platform.pathSeparator}python.exe',
-    );
-    if (bundledPython.existsSync()) return bundledPython.absolute.path;
-
+  /// `models` beside the executable (portable), otherwise `backend/models` in
+  /// the repository that holds the development build.
+  Directory? _findModelsDirectory(Directory backendDirectory) {
+    final sep = Platform.pathSeparator;
+    final beside = Directory('${backendDirectory.path}${sep}models');
+    if (beside.existsSync()) return beside;
     var directory = backendDirectory;
     for (var depth = 0; depth < 8; depth++) {
-      final candidate = File(
-        '${directory.path}${Platform.pathSeparator}.venv'
-        '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe',
-      );
-      if (candidate.existsSync()) return candidate.path;
+      final candidate = Directory('${directory.path}${sep}backend${sep}models');
+      if (candidate.existsSync()) return candidate;
       final parent = directory.parent;
       if (parent.path == directory.path) break;
       directory = parent;
-    }
-
-    final systemPath =
-        Platform.environment['PATH'] ?? Platform.environment['Path'] ?? '';
-    for (final entry in systemPath.split(';')) {
-      final path = entry.trim().replaceAll('"', '');
-      if (path.isEmpty) continue;
-      final candidate = File('$path${Platform.pathSeparator}python.exe');
-      if (candidate.existsSync()) return candidate.absolute.path;
     }
     return null;
   }

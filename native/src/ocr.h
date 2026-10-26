@@ -1,0 +1,39 @@
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace lingosnap {
+
+struct OcrLine {
+  std::string text;
+  float score = 0.f;
+  // Axis-aligned box in source image pixels: x0, y0, x1, y1.
+  float box[4] = {0, 0, 0, 0};
+  // A bullet mark (dot/square) sits just left of the box; the detector skips it.
+  bool bullet = false;
+};
+
+// PP-OCRv6 small detection + multilingual (English/Latin) recognition running on ONNX Runtime.
+// Mirrors the RapidOCR pipeline the Python backend used (no angle classifier).
+class OcrEngine {
+ public:
+  OcrEngine(const std::filesystem::path& det_model,
+            const std::filesystem::path& rec_model);
+  ~OcrEngine();
+
+  // Returns lines sorted top-to-bottom / left-to-right with score >= 0.5.
+  std::vector<OcrLine> Recognize(const std::filesystem::path& image_path) const;
+
+  // Same, for a packed 8-bit BGR image already in memory (used by live translation).
+  std::vector<OcrLine> Recognize(const uint8_t* bgr, int width, int height, int stride) const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace lingosnap

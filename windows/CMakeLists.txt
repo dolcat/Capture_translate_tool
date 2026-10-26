@@ -102,17 +102,37 @@ install(CODE "
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 
-# Bundle the local OCR/translation server next to Flutter assets. Python and
-# model runtime packaging can be replaced by a dedicated installer later.
-# Remove the previous backend first so deleted models/packages cannot survive
+# Bundle the native OCR/translation backend (built by tool/build_native.ps1)
+# and the offline models (tool/setup_models.ps1) next to the Flutter assets.
+# Remove the previous backend first so deleted files cannot survive
 # incremental Windows builds.
 install(CODE "
   file(REMOVE_RECURSE \"${INSTALL_BUNDLE_DATA_DIR}/backend\")
   " COMPONENT Runtime)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../backend"
-  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
-  COMPONENT Runtime
-  PATTERN "__pycache__" EXCLUDE)
+set(NATIVE_BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../build/native/stage")
+if(EXISTS "${NATIVE_BACKEND_DIR}/lingosnap_backend.exe")
+  install(DIRECTORY "${NATIVE_BACKEND_DIR}/"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/backend"
+    COMPONENT Runtime)
+else()
+  message(WARNING "Native backend not found; run tool/build_native.ps1 first.")
+endif()
+# The optional VinAI model (tool/convert_vinai.ps1, AGPL-3.0, ~430 MB) is not shipped in
+# Release/Profile builds or the portable ZIP; users convert it themselves. Debug builds
+# (flutter run) still get it so development uses the same model as the repository.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models")
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/backend"
+    COMPONENT Runtime
+    PATTERN "vinai-en-vi" EXCLUDE
+    PATTERN "vinai-en-vi.tmp" EXCLUDE)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models/vinai-en-vi/model/model.bin")
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models/vinai-en-vi"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/backend/models"
+    CONFIGURATIONS Debug
+    COMPONENT Runtime)
+endif()
 
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

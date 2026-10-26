@@ -1,8 +1,8 @@
 # LingoSnap
 
-Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng RapidOCR/ONNX Runtime và dịch
-English → Vietnamese bằng Argos/CTranslate2 và kiểm tra ngữ pháp tiếng Anh bằng
-LanguageTool, hoàn toàn offline.
+Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng PP-OCRv6 small chạy trên ONNX Runtime (C++) và dịch
+English → Vietnamese bằng CTranslate2 (C++; VinAI Translate nếu đã chuyển model, nếu không thì Argos)
+và kiểm tra ngữ pháp tiếng Anh bằng LanguageTool, hoàn toàn offline.
 
 ## Chạy giao diện
 
@@ -19,15 +19,31 @@ qua lại giữa chức năng Dịch và Ngữ pháp. Người dùng có thể c
 trong **Settings**; cấu hình được lưu tại
 `%APPDATA%\LingoSnap\settings.json`.
 
-Thiết lập backend và tải model lần đầu:
-
-Yêu cầu Python 3.11 và Java 17:
+Backend là chương trình C++ `lingosnap_backend.exe` (không còn Python). Thiết lập lần đầu
+trên Windows (cần Visual Studio 2022 Desktop C++, CMake, Git, Java 17 cho LanguageTool):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File backend\setup_backend.ps1
+powershell -ExecutionPolicy Bypass -File tool\build_native.ps1   # build backend vào build\native\stage
+powershell -ExecutionPolicy Bypass -File tool\setup_models.ps1   # tải model vào backend\models
 ```
 
-Sau đó Flutter sẽ tự mở và đóng Python backend khi cần.
+Tuỳ chọn, dịch tự nhiên hơn: chuyển VinAI Translate en2vi v2 (mBART) sang CTranslate2 một lần
+(cần Python cho riêng bước này, khoảng 1 GB môi trường tạm và 1,7 GB tải về):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\convert_vinai.ps1   # tạo backend\models\vinai-en-vi
+```
+
+Có `backend\models\vinai-en-vi` thì backend dùng VinAI, không có thì dùng Argos. Model VinAI chậm hơn
+và tốn RAM hơn Argos (khoảng 430 MB so với 85 MB) và theo giấy phép AGPL-3.0, nên bản build Release
+và ZIP portable không kèm model này (chỉ bản Debug khi `flutter run` có). Trên máy đã cài bản portable,
+người dùng tự chuyển model vào thư mục models của bản cài (cần thư mục `tool` của repo):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\convert_vinai.ps1 -ModelsDir "<thư mục giải nén>\LingoSnap\data\backend\models"
+```
+
+Sau đó Flutter sẽ tự mở và đóng backend khi cần. Xem `native/README.md` để biết kiến trúc.
 
 ## Đóng gói portable cho máy khác
 
@@ -37,8 +53,8 @@ Chạy trên máy build có Internet:
 powershell -ExecutionPolicy Bypass -File tool\build_portable.ps1
 ```
 
-Script build ứng dụng Windows, tải Python Embedded, đóng gói Java runtime đang cài
-trên máy build, cài toàn bộ dependency backend và tạo
+Script build ứng dụng Windows, đóng gói Java runtime đang cài trên máy build
+(chỉ dùng cho LanguageTool), copy backend C++ cùng model, chạy thử backend và tạo
 `build\portable\LingoSnap-windows-x64.zip`. Có thể truyền `-JavaHome` nếu Java 17
 không nằm trong `JAVA_HOME` hoặc `PATH`. Trên máy khác chỉ cần giải nén toàn bộ ZIP
 rồi chạy `LingoSnap\capture_translate_tool.exe`; không cần Git, Flutter, Python,

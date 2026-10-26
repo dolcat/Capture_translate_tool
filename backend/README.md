@@ -1,28 +1,7 @@
-# LingoSnap local backend
+# LingoSnap backend
 
-Backend chạy hoàn toàn trên máy và cung cấp:
-
-- `GET /health`
-- `POST /analyze`
-- `POST /translate`
-- `POST /grammar`
-- `POST /grammar/warmup`
-
-Thiết lập lần đầu trên Windows:
-
-LanguageTool local yêu cầu Java 17. Cài Java 17 trước, sau đó chạy:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File backend\setup_backend.ps1
-```
-
-Chạy thủ công để kiểm tra:
-
-```powershell
-python backend\server.py
-```
-
-Flutter tự khởi động `server.py` khi người dùng bắt đầu xử lý ảnh. Gói dịch
-offline Argos English→Vietnamese, model PP-OCRv5 mobile định dạng ONNX cho detection,
-English recognition và LanguageTool 6.8 đều được lưu trong `backend/models`. Sau bước
-thiết lập đầu tiên, backend không cần Internet.
+Mã nguồn backend nằm ở `native/` (C++). Thư mục này chỉ chứa model tải về trong
+`backend/models/` (không commit): chạy `tool\setup_models.ps1` để tải PP-OCRv6 small ONNX,
+gói dịch Argos English→Vietnamese và LanguageTool 6.8. `tool\convert_vinai.ps1` (cần Python, một lần)
+tạo thêm `backend/models/vinai-en-vi` (VinAI Translate en2vi v2, AGPL-3.0); khi có, backend dùng model
+này thay cho Argos.
