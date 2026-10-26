@@ -105,9 +105,22 @@ foreach ($dll in Get-ChildItem -Path (Join-Path $crtDirectory '*.dll')) {
     Copy-Item -LiteralPath $source -Destination $backendRoot -Force
 }
 
+# The VinAI model (AGPL-3.0) is never shipped: users add it with tool\convert_vinai.ps1.
+# windows\CMakeLists.txt already leaves it out of Release builds; this guards stale outputs.
+foreach ($name in 'vinai-en-vi', 'vinai-en-vi.tmp') {
+    $vinai = Join-Path $backendRoot "models\$name"
+    if (Test-Path -LiteralPath $vinai) {
+        Write-Host "Removing $name from the package"
+        Remove-Item -LiteralPath $vinai -Recurse -Force
+    }
+}
+
 # Smoke test: start the backend, check translation, then stop it.
 $backendExe = Join-Path $backendRoot 'lingosnap_backend.exe'
 if (-not (Test-Path -LiteralPath $backendExe)) { throw 'lingosnap_backend.exe is missing. Run tool\build_native.ps1 first.' }
+foreach ($dll in 'ctranslate2.dll', 'libiomp5md.dll') {
+    if (-not (Test-Path -LiteralPath (Join-Path $backendRoot $dll))) { throw "$dll is missing. Run tool\build_native.ps1 again." }
+}
 $probe = Start-Process -FilePath $backendExe -ArgumentList '--port', '8791' -WorkingDirectory $backendRoot -PassThru -WindowStyle Hidden
 try {
     $body = '{"text":"Hello world!","sourceLanguage":"en","targetLanguage":"vi"}'

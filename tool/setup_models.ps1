@@ -27,7 +27,8 @@ $ocrBase = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onn
 Get-Model "$ocrBase/det/PP-OCRv6_det_small.onnx" (Join-Path $ModelsDir 'rapidocr\PP-OCRv6_det_small.onnx') '090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f'
 Get-Model "$ocrBase/rec/PP-OCRv6_rec_small.onnx" (Join-Path $ModelsDir 'rapidocr\PP-OCRv6_rec_small.onnx') '6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884'
 
-# Translation: Argos English -> Vietnamese (CTranslate2 model + SentencePiece).
+# Translation: Argos English -> Vietnamese (CTranslate2 model + SentencePiece). It is the fallback:
+# the better VinAI model needs a one-time conversion with Python, see tool\convert_vinai.ps1.
 $mtDir = Join-Path $ModelsDir 'argos-en-vi'
 if (-not (Test-Path (Join-Path $mtDir 'model\model.bin'))) {
     $archive = Join-Path $temp 'translate-en_vi-1_9.zip'
@@ -50,3 +51,6 @@ if (-not (Test-Path $ltJar)) {
 }
 
 Write-Host "Models are ready: $ModelsDir"
+if (-not (Test-Path (Join-Path $ModelsDir 'vinai-en-vi\model\model.bin'))) {
+    Write-Host 'Optional: tool\convert_vinai.ps1 converts VinAI Translate (better Vietnamese, needs Python once).'
+}
