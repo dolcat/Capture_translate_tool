@@ -117,9 +117,20 @@ if(EXISTS "${NATIVE_BACKEND_DIR}/lingosnap_backend.exe")
 else()
   message(WARNING "Native backend not found; run tool/build_native.ps1 first.")
 endif()
+# The optional VinAI model (tool/convert_vinai.ps1, AGPL-3.0, ~430 MB) is not shipped in
+# Release/Profile builds or the portable ZIP; users convert it themselves. Debug builds
+# (flutter run) still get it so development uses the same model as the repository.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models")
   install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models"
     DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/backend"
+    COMPONENT Runtime
+    PATTERN "vinai-en-vi" EXCLUDE
+    PATTERN "vinai-en-vi.tmp" EXCLUDE)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models/vinai-en-vi/model/model.bin")
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../backend/models/vinai-en-vi"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/backend/models"
+    CONFIGURATIONS Debug
     COMPONENT Runtime)
 endif()
 

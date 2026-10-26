@@ -6,7 +6,10 @@
 
 namespace lingosnap {
 
-// Argos English -> Vietnamese model: SentencePiece tokenizer + CTranslate2 (INT8, CPU).
+// English -> Vietnamese with SentencePiece + CTranslate2 (INT8, CPU). Two model layouts:
+//   VinAI Translate en2vi v2 (mBART): model/ + sentencepiece.bpe.model
+//   Argos (Marian):                   model/ + sentencepiece.model
+// CTranslate2 uses LINGOSNAP_MT_THREADS threads (default 2, so games keep their CPU).
 class TextTranslator {
  public:
   explicit TextTranslator(const std::filesystem::path& model_dir);

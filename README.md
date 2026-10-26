@@ -1,8 +1,8 @@
 # LingoSnap
 
-Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng PP-OCRv5 chạy trên ONNX Runtime (C++) và dịch
-English → Vietnamese bằng Argos/CTranslate2 (C++) và kiểm tra ngữ pháp tiếng Anh bằng
-LanguageTool, hoàn toàn offline.
+Công cụ Windows chụp một vùng màn hình, nhận diện chữ bằng PP-OCRv6 small chạy trên ONNX Runtime (C++) và dịch
+English → Vietnamese bằng CTranslate2 (C++; VinAI Translate nếu đã chuyển model, nếu không thì Argos)
+và kiểm tra ngữ pháp tiếng Anh bằng LanguageTool, hoàn toàn offline.
 
 ## Chạy giao diện
 
@@ -25,6 +25,22 @@ trên Windows (cần Visual Studio 2022 Desktop C++, CMake, Git, Java 17 cho Lan
 ```powershell
 powershell -ExecutionPolicy Bypass -File tool\build_native.ps1   # build backend vào build\native\stage
 powershell -ExecutionPolicy Bypass -File tool\setup_models.ps1   # tải model vào backend\models
+```
+
+Tuỳ chọn, dịch tự nhiên hơn: chuyển VinAI Translate en2vi v2 (mBART) sang CTranslate2 một lần
+(cần Python cho riêng bước này, khoảng 1 GB môi trường tạm và 1,7 GB tải về):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\convert_vinai.ps1   # tạo backend\models\vinai-en-vi
+```
+
+Có `backend\models\vinai-en-vi` thì backend dùng VinAI, không có thì dùng Argos. Model VinAI chậm hơn
+và tốn RAM hơn Argos (khoảng 430 MB so với 85 MB) và theo giấy phép AGPL-3.0, nên bản build Release
+và ZIP portable không kèm model này (chỉ bản Debug khi `flutter run` có). Trên máy đã cài bản portable,
+người dùng tự chuyển model vào thư mục models của bản cài (cần thư mục `tool` của repo):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\convert_vinai.ps1 -ModelsDir "<thư mục giải nén>\LingoSnap\data\backend\models"
 ```
 
 Sau đó Flutter sẽ tự mở và đóng backend khi cần. Xem `native/README.md` để biết kiến trúc.

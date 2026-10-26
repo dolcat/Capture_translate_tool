@@ -28,13 +28,31 @@ if (-not (Test-Path $ort)) {
     Expand-Archive $zip -DestinationPath $deps -Force
 }
 
-# CTranslate2 (shared, Ruy INT8 backend, no MKL) and minimal static OpenCV.
-$ct2Src = Get-Source 'https://github.com/OpenNMT/CTranslate2' 'v4.8.1' 'ct2' -Recursive
-$ct2Install = Join-Path $deps 'ct2-install'
+# CTranslate2 headers and import library (shared, Ruy backend, no MKL needed to build), and
+# minimal static OpenCV. The ctranslate2.dll shipped at run time comes from the wheel below.
+$ct2Version = '4.8.3'
+$ct2Src = Get-Source 'https://github.com/OpenNMT/CTranslate2' "v$ct2Version" "ct2-$ct2Version" -Recursive
+$ct2Build = Join-Path $deps "ct2-$ct2Version-build"
+$ct2Install = Join-Path $deps "ct2-$ct2Version-install"
 if (-not (Test-Path $ct2Install)) {
-    Invoke-Checked { cmake -S $ct2Src -B (Join-Path $deps 'ct2-build') -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DWITH_MKL=OFF" "-DWITH_RUY=ON" "-DOPENMP_RUNTIME=COMP" "-DBUILD_CLI=OFF" "-DBUILD_SHARED_LIBS=ON" "-DCMAKE_INSTALL_PREFIX=$ct2Install" }
-    Invoke-Checked { cmake --build (Join-Path $deps 'ct2-build') --config Release -j }
-    Invoke-Checked { cmake --install (Join-Path $deps 'ct2-build') --config Release }
+    Invoke-Checked { cmake -S $ct2Src -B $ct2Build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DWITH_MKL=OFF" "-DWITH_RUY=ON" "-DOPENMP_RUNTIME=COMP" "-DBUILD_CLI=OFF" "-DBUILD_SHARED_LIBS=ON" "-DCMAKE_INSTALL_PREFIX=$ct2Install" }
+    Invoke-Checked { cmake --build $ct2Build --config Release -j }
+    Invoke-Checked { cmake --install $ct2Build --config Release }
+}
+
+# CTranslate2 runtime: the official Windows wheel of the same version (same headers, same ABI)
+# has ctranslate2.dll built with Intel MKL, about 5x faster for INT8 on x86 than the Ruy build.
+# MKL is linked into the dll (Intel Simplified Software License) and libiomp5md.dll is Intel's
+# OpenMP runtime; both are redistributable. Makes the backend about 54 MB larger.
+$ct2Wheel = Join-Path $deps "ctranslate2-$ct2Version-wheel"
+if (-not (Test-Path (Join-Path $ct2Wheel 'ctranslate2\ctranslate2.dll'))) {
+    $zip = Join-Path $deps "ctranslate2-$ct2Version-win_amd64.zip"
+    Invoke-WebRequest 'https://files.pythonhosted.org/packages/b9/0d/217ea887dbc6feea8954620a020ba674cb5fd0bf17961a44a8b22602c8e4/ctranslate2-4.8.3-cp311-cp311-win_amd64.whl' -OutFile $zip
+    if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne '6833B81FD7C86CB30C4A263033F4B60127F925120CC416EBEEB4C58ECBA1F58B') {
+        Remove-Item -LiteralPath $zip -Force
+        throw 'SHA256 mismatch for the CTranslate2 wheel'
+    }
+    Expand-Archive $zip -DestinationPath $ct2Wheel -Force
 }
 
 $cvSrc = Get-Source 'https://github.com/opencv/opencv' '4.13.0' 'opencv'
@@ -57,7 +75,7 @@ if (-not $cvConfig) { throw "OpenCV static package not found under $cvInstall" }
 $cvDir = $cvConfig.Directory.FullName
 
 $build = Join-Path $work 'build'
-Invoke-Checked { cmake -S (Join-Path $projectRoot 'native') -B $build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DONNXRUNTIME_ROOT=$ort" "-DLS_THIRD_PARTY=$deps" "-DOpenCV_DIR=$cvDir" "-DCMAKE_PREFIX_PATH=$ct2Install" }
+Invoke-Checked { cmake -S (Join-Path $projectRoot 'native') -B $build -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DONNXRUNTIME_ROOT=$ort" "-DLS_THIRD_PARTY=$deps" "-DOpenCV_DIR=$cvDir" "-DCMAKE_PREFIX_PATH=$ct2Install" "-Dctranslate2_DIR=$ct2Install\lib\cmake\ctranslate2" }
 Invoke-Checked { cmake --build $build --config Release -j }
 
 # A backend left running by the app locks the staged files.
@@ -68,5 +86,6 @@ Get-Process lingosnap_backend -ErrorAction SilentlyContinue |
 
 Copy-Item (Join-Path $build 'Release\lingosnap_backend.exe') $stage -Force
 Copy-Item (Join-Path $ort 'lib\onnxruntime.dll') $stage -Force
-Copy-Item (Join-Path $ct2Install 'bin\ctranslate2.dll') $stage -Force
+Copy-Item (Join-Path $ct2Wheel 'ctranslate2\ctranslate2.dll') $stage -Force
+Copy-Item (Join-Path $ct2Wheel 'ctranslate2\libiomp5md.dll') $stage -Force
 Write-Host "Backend staged in $stage"
