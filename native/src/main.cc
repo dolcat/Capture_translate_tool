@@ -40,12 +40,19 @@ class Engines {
 
   fs::path ocr_det() const { return models_ / "rapidocr" / "PP-OCRv6_det_small.onnx"; }
   fs::path ocr_rec() const { return models_ / "rapidocr" / "PP-OCRv6_rec_small.onnx"; }
-  fs::path mt_dir() const { return models_ / "argos-en-vi"; }
+  // VinAI Translate (mBART) when it has been converted (tool\convert_vinai.ps1), else Argos.
+  fs::path mt_dir() const {
+    fs::path vinai = models_ / "vinai-en-vi";
+    return fs::is_regular_file(vinai / "model" / "model.bin") ? vinai : models_ / "argos-en-vi";
+  }
+  fs::path mt_tokenizer() const {
+    return mt_dir() / (mt_dir().filename() == "vinai-en-vi" ? "sentencepiece.bpe.model" : "sentencepiece.model");
+  }
 
   bool models_ready() const {
     return fs::is_regular_file(ocr_det()) && fs::is_regular_file(ocr_rec()) &&
            fs::is_regular_file(mt_dir() / "model" / "model.bin") &&
-           fs::is_regular_file(mt_dir() / "sentencepiece.model") && grammar_.jar_present();
+           fs::is_regular_file(mt_tokenizer()) && grammar_.jar_present();
   }
   bool ready() const { return ocr_ready_ && mt_ready_; }
   bool grammar_ready() const { return grammar_ready_; }
@@ -161,6 +168,7 @@ int main(int argc, char** argv) {
   server.Get("/health", [&](const httplib::Request&, httplib::Response& res) {
     Ok(res, {{"ok", true}, {"ready", engines.ready()}, {"grammarReady", engines.grammar_ready()},
              {"packagesReady", true}, {"modelsReady", engines.models_ready()},
+             {"translationModel", engines.mt_dir().filename().string()},
              {"error", engines.error().empty() ? json(nullptr) : json(engines.error())}});
   });
 
@@ -204,7 +212,8 @@ int main(int argc, char** argv) {
     if (text.find_first_not_of(" \t\r\n") == std::string::npos)
       return Fail(res, 400, "Hãy nhập văn bản tiếng Anh cần dịch.");
     try {
-      Ok(res, {{"translated", engines.Mt().Translate(text)}});
+      int beam = b.value("beamSize", 2);  // optional; 1 is fastest
+      Ok(res, {{"translated", engines.Mt().Translate(text, beam)}});
     } catch (const std::exception& e) {
       Fail(res, 503, e.what());
     }

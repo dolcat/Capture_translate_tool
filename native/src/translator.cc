@@ -6,6 +6,7 @@
 #include <sentencepiece_processor.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -21,20 +22,31 @@ std::string Trim(const std::string& s) {
   return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
 }
 
+size_t MtThreads() {
+  const char* env = std::getenv("LINGOSNAP_MT_THREADS");
+  int n = env && *env ? std::atoi(env) : 2;
+  return static_cast<size_t>(std::clamp(n, 0, 64));  // 0 = CTranslate2 default (physical cores)
+}
+
 }  // namespace
 
 struct TextTranslator::Impl {
   std::mutex run_mutex;  // one-shot requests and live translation share the model
   sentencepiece::SentencePieceProcessor sp;
   std::unique_ptr<ctranslate2::Translator> translator;
+  // mBART needs "pieces </s> en_XX" as source and starts decoding at "vi_VN"; without the
+  // source suffix it only repeats the first word ("Chúng chúng chúng ...").
+  bool mbart = false;
 };
 
 TextTranslator::TextTranslator(const std::filesystem::path& model_dir)
     : impl_(std::make_unique<Impl>()) {
-  auto status = impl_->sp.Load((model_dir / "sentencepiece.model").string());
-  if (!status.ok()) throw std::runtime_error("Không nạp được sentencepiece.model: " + status.ToString());
+  impl_->mbart = std::filesystem::is_regular_file(model_dir / "sentencepiece.bpe.model");
+  const char* sp_name = impl_->mbart ? "sentencepiece.bpe.model" : "sentencepiece.model";
+  auto status = impl_->sp.Load((model_dir / sp_name).string());
+  if (!status.ok()) throw std::runtime_error(std::string("Không nạp được ") + sp_name + ": " + status.ToString());
   ctranslate2::ReplicaPoolConfig pool;
-  pool.num_threads_per_replica = 0;  // CTranslate2 default (physical cores)
+  pool.num_threads_per_replica = MtThreads();
   impl_->translator = std::make_unique<ctranslate2::Translator>(
       (model_dir / "model").string(), ctranslate2::Device::CPU, ctranslate2::ComputeType::INT8,
       std::vector<int>{0}, false, pool);
@@ -62,6 +74,7 @@ std::string TextTranslator::Translate(const std::string& text, int beam_size) co
       std::vector<std::string> pieces;
       auto status = impl_->sp.Encode(content, &pieces);
       if (!status.ok()) throw std::runtime_error("Tokenize thất bại: " + status.ToString());
+      if (impl_->mbart) { pieces.push_back("</s>"); pieces.push_back("en_XX"); }
       l.batch_index = static_cast<int>(batch.size());
       batch.push_back(std::move(pieces));
     }
@@ -72,13 +85,16 @@ std::string TextTranslator::Translate(const std::string& text, int beam_size) co
   ctranslate2::TranslationOptions options;
   options.beam_size = static_cast<size_t>(std::clamp(beam_size, 1, 8));
   options.max_decoding_length = 512;
-  auto results = impl_->translator->translate_batch(batch, options);
+  std::vector<std::vector<std::string>> prefix;
+  if (impl_->mbart) prefix.assign(batch.size(), {"vi_VN"});
+  auto results = impl_->translator->translate_batch(batch, prefix, options);
 
   std::vector<std::string> translated(batch.size());
   for (size_t b = 0; b < results.size() && b < batch.size(); ++b) {
     if (results[b].hypotheses.empty()) continue;
     std::string joined;
-    for (const auto& tok : results[b].hypotheses[0]) joined += tok;
+    for (const auto& tok : results[b].hypotheses[0])
+      if (tok != "vi_VN" && tok != "</s>") joined += tok;
     std::string out;
     for (size_t i = 0; i < joined.size();) {
       if (joined.compare(i, 3, kSpaceMarker) == 0) { out.push_back(' '); i += 3; }
